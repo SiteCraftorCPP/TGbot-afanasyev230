@@ -81,6 +81,23 @@ def create_tables():
     )
     """)
 
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS stories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        image_url TEXT,
+        game_id INTEGER,
+        order_num INTEGER DEFAULT 0,
+        hidden INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (game_id) REFERENCES games(id)
+    )
+    """)
+
+    # Исправляем существующие сюжеты: если hidden NULL (старые записи), делаем видимым
+    cur.execute("UPDATE stories SET hidden = 0 WHERE hidden IS NULL")
+    
     conn.commit()
     conn.close()
 
@@ -324,5 +341,92 @@ def set_setting(key: str, value: str):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+    conn.commit()
+    conn.close()
+
+
+# Stories
+def get_visible_stories():
+    """Получить видимые сюжеты."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, title, content, image_url, game_id, order_num "
+        "FROM stories WHERE hidden = 0 ORDER BY created_at"
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def get_all_stories():
+    """Получить все сюжеты для админки."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, title, content, image_url, game_id, order_num, hidden "
+        "FROM stories ORDER BY order_num, created_at"
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def get_story(story_id: int):
+    """Получить сюжет по ID."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM stories WHERE id = ?", (story_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def add_story(title, content, image_url=None, game_id=None, order_num=0):
+    """Добавить новый сюжет."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO stories (title, content, image_url, game_id, order_num, hidden)
+           VALUES (?, ?, ?, ?, ?, 0)""",
+        (title, content or "", image_url or "", game_id, order_num or 0),
+    )
+    sid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return sid
+
+
+def update_story(sid, **kwargs):
+    """Обновить сюжет."""
+    if not kwargs:
+        return
+    conn = get_conn()
+    cur = conn.cursor()
+    cols = list(kwargs.keys())
+    vals = list(kwargs.values()) + [sid]
+    sql = "UPDATE stories SET " + ", ".join(f"{c}=?" for c in cols) + " WHERE id=?"
+    cur.execute(sql, vals)
+    conn.commit()
+    conn.close()
+
+
+def toggle_story_visibility(story_id: int):
+    """Переключить видимость сюжета."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE stories SET hidden = 1 - hidden WHERE id = ?", (story_id,))
+    cur.execute("SELECT hidden FROM stories WHERE id = ?", (story_id,))
+    h = cur.fetchone()[0]
+    conn.commit()
+    conn.close()
+    return h
+
+
+def delete_story(story_id: int):
+    """Удалить сюжет."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM stories WHERE id = ?", (story_id,))
     conn.commit()
     conn.close()

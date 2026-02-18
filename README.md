@@ -1,4 +1,4 @@
-## TGbot afanasyev230
+й## TGbot afanasyev230
 
 Минимальный телеграм‑бот на **aiogram 3** для записи на игры.
 

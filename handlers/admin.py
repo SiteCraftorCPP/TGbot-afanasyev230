@@ -15,6 +15,13 @@ from database import (
     delete_game,
     get_setting,
     set_setting,
+    get_all_stories,
+    get_story,
+    add_story,
+    update_story,
+    toggle_story_visibility,
+    delete_story,
+    get_visible_games,
 )
 
 router = Router()
@@ -30,6 +37,13 @@ class AdminGameStates(StatesGroup):
     add_desc = State()
     add_limit = State()
     edit_game = State()
+    edit_field = State()
+
+
+class AdminStoryStates(StatesGroup):
+    add_content = State()
+    add_image = State()
+    edit_story = State()
     edit_field = State()
 
 
@@ -49,10 +63,11 @@ async def cmd_admin(message: types.Message):
         return
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📋 Игры", callback_data="admin_games")],
-            [InlineKeyboardButton(text="🗓 Редактировать расписание", callback_data="admin_schedule")],
-            [InlineKeyboardButton(text="📊 Лиды", callback_data="admin_leads")],
-            [InlineKeyboardButton(text="⚙️ Follow-up", callback_data="admin_followup")],
+            [InlineKeyboardButton(text="🎮 Игры", callback_data="admin_games")],
+            [InlineKeyboardButton(text="📆 Расписание", callback_data="admin_schedule")],
+            [InlineKeyboardButton(text="📖 Сюжеты", callback_data="admin_stories")],
+            [InlineKeyboardButton(text="📈 Лиды", callback_data="admin_leads")],
+            [InlineKeyboardButton(text="🔄 Follow-up", callback_data="admin_followup")],
         ]
     )
     await message.answer("Админ-панель:", reply_markup=kb)
@@ -64,10 +79,10 @@ def _games_list_kb():
     kb = []
     for g in games:
         gid, name, date, time, place, price, desc, limit, hidden = g
-        status = "🔴" if hidden else "🟢"
+        status = "❌" if hidden else "✅"
         text += f"{status} {name} — {date}\n"
         kb.append([
-            InlineKeyboardButton(text=f"{'🟢 Показать' if hidden else '🔴 Скрыть'}", callback_data=f"adm_toggle_{gid}"),
+            InlineKeyboardButton(text=f"{'✅ Показать' if hidden else '❌ Скрыть'}", callback_data=f"adm_toggle_{gid}"),
             InlineKeyboardButton(text="🗑 Удалить", callback_data=f"adm_delete_{gid}"),
         ])
     kb.append([InlineKeyboardButton(text="➕ Добавить игру", callback_data="admin_add_game")])
@@ -77,15 +92,15 @@ def _games_list_kb():
 
 def _schedule_edit_kb(games):
     """Расписание с кнопками редактирования."""
-    text = "**🗓 Расписание (редактирование):**\n\n"
+    text = "**📆 Расписание (редактирование):**\n\n"
     kb = []
     for g in games:
         gid, name, date, time, place, price, desc, limit, hidden = g
-        status = "🔴" if hidden else "🟢"
+        status = "❌" if hidden else "✅"
         text += f"{status} {name} — {date}" + (f" {time}" if time else "") + "\n"
         kb.append([
             InlineKeyboardButton(text="✏️", callback_data=f"adm_edit_{gid}"),
-            InlineKeyboardButton(text=f"{'🟢' if hidden else '🔴'}", callback_data=f"adm_toggle_s_{gid}"),
+            InlineKeyboardButton(text=f"{'✅' if hidden else '❌'}", callback_data=f"adm_toggle_s_{gid}"),
             InlineKeyboardButton(text="🗑", callback_data=f"adm_delete_s_{gid}"),
         ])
     kb.append([InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")])
@@ -171,7 +186,7 @@ async def admin_edit_field_start(callback: types.CallbackQuery, state: FSMContex
     await state.set_state(AdminGameStates.edit_field)
     await state.update_data(edit_gid=gid, edit_field=field)
     skip_kb = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="Пропустить", callback_data="adm_ef_skip")]]
+        inline_keyboard=[[InlineKeyboardButton(text="💫 Пропустить", callback_data="adm_ef_skip")]]
     ) if field in ("game_time", "place", "price", "description") else None
     await callback.message.edit_text(prompts.get(field, "Введи значение:"), reply_markup=skip_kb)
     await callback.answer()
@@ -304,7 +319,7 @@ async def admin_add_time(message: types.Message, state: FSMContext):
     await message.answer(
         "Место или «пропустить»:",
         reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="Пропустить", callback_data="admin_skip_place")]]
+            inline_keyboard=[[InlineKeyboardButton(text="💫 Пропустить", callback_data="admin_skip_place")]]
         ),
     )
 
@@ -317,7 +332,7 @@ async def admin_add_place(message: types.Message, state: FSMContext):
     await message.answer(
         "Цена или «пропустить»:",
         reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="Пропустить", callback_data="admin_skip_price")]]
+            inline_keyboard=[[InlineKeyboardButton(text="💫 Пропустить", callback_data="admin_skip_price")]]
         ),
     )
 
@@ -332,7 +347,7 @@ async def admin_skip_place(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         "Цена или «пропустить»:",
         reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="Пропустить", callback_data="admin_skip_price")]]
+            inline_keyboard=[[InlineKeyboardButton(text="💫 Пропустить", callback_data="admin_skip_price")]]
         ),
     )
     await callback.answer()
@@ -346,7 +361,7 @@ async def admin_add_price(message: types.Message, state: FSMContext):
     await message.answer(
         "Короткое описание или «пропустить»:",
         reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="Пропустить", callback_data="admin_skip_desc")]]
+            inline_keyboard=[[InlineKeyboardButton(text="💫 Пропустить", callback_data="admin_skip_desc")]]
         ),
     )
 
@@ -361,7 +376,7 @@ async def admin_skip_price(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         "Короткое описание или «пропустить»:",
         reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="Пропустить", callback_data="admin_skip_desc")]]
+            inline_keyboard=[[InlineKeyboardButton(text="💫 Пропустить", callback_data="admin_skip_desc")]]
         ),
     )
     await callback.answer()
@@ -375,7 +390,7 @@ async def admin_add_desc(message: types.Message, state: FSMContext):
     await message.answer(
         "Лимит мест (число) или 0:",
         reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="Пропустить (0)", callback_data="admin_skip_limit")]]
+            inline_keyboard=[[InlineKeyboardButton(text="💫 Пропустить (0)", callback_data="admin_skip_limit")]]
         ),
     )
 
@@ -390,7 +405,7 @@ async def admin_skip_desc(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         "Лимит мест (число) или 0:",
         reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="Пропустить (0)", callback_data="admin_skip_limit")]]
+            inline_keyboard=[[InlineKeyboardButton(text="💫 Пропустить (0)", callback_data="admin_skip_limit")]]
         ),
     )
     await callback.answer()
@@ -412,7 +427,7 @@ async def admin_skip_limit(callback: types.CallbackQuery, state: FSMContext):
         limit_places=0,
     )
     await state.clear()
-    await callback.message.edit_text("✅ Игра добавлена.", reply_markup=None)
+    await callback.message.edit_text("✓ Игра добавлена.", reply_markup=None)
     await callback.answer()
 
 
@@ -433,7 +448,7 @@ async def admin_add_limit(message: types.Message, state: FSMContext):
         limit_places=limit,
     )
     await state.clear()
-    await message.answer("✅ Игра добавлена.")
+    await message.answer("✓ Игра добавлена.")
 
 
 @router.callback_query(F.data == "admin_leads")
@@ -471,7 +486,7 @@ async def admin_followup(callback: types.CallbackQuery):
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Выключить" if cur == "1" else "Включить",
+                    text="❌ Выключить" if cur == "1" else "✅ Включить",
                     callback_data="admin_followup_toggle",
                 )
             ],
@@ -503,11 +518,163 @@ async def admin_back(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📋 Игры", callback_data="admin_games")],
-            [InlineKeyboardButton(text="🗓 Редактировать расписание", callback_data="admin_schedule")],
-            [InlineKeyboardButton(text="📊 Лиды", callback_data="admin_leads")],
-            [InlineKeyboardButton(text="⚙️ Follow-up", callback_data="admin_followup")],
+            [InlineKeyboardButton(text="🎮 Игры", callback_data="admin_games")],
+            [InlineKeyboardButton(text="📆 Расписание", callback_data="admin_schedule")],
+            [InlineKeyboardButton(text="📖 Сюжеты", callback_data="admin_stories")],
+            [InlineKeyboardButton(text="📈 Лиды", callback_data="admin_leads")],
+            [InlineKeyboardButton(text="🔄 Follow-up", callback_data="admin_followup")],
         ]
     )
     await callback.message.edit_text("Админ-панель:", reply_markup=kb)
     await callback.answer()
+
+
+# Stories Admin
+def _stories_list_kb():
+    """Клавиатура со списком сюжетов для админки."""
+    stories = get_all_stories()
+    text = "**📖 Сюжеты:**\n\n"
+    kb = []
+    
+    # Кнопка "Добавить сюжет" всегда должна быть видна в начале
+    kb.append([InlineKeyboardButton(text="➕ Добавить сюжет", callback_data="admin_add_story")])
+    
+    if not stories:
+        text += "Пока нет сюжетов.\n"
+    else:
+        for s in stories:
+            sid, title, content, image_url, game_id, order_num, hidden = s
+            status = "❌" if hidden else "✅"
+            text += f"{status} {title}\n"
+            kb.append([
+                InlineKeyboardButton(text=f"{'✅ Показать' if hidden else '❌ Скрыть'}", callback_data=f"adm_story_toggle_{sid}"),
+                InlineKeyboardButton(text="🗑 Удалить", callback_data=f"adm_story_delete_{sid}"),
+            ])
+    
+    kb.append([InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")])
+    return text, InlineKeyboardMarkup(inline_keyboard=kb)
+
+
+@router.callback_query(F.data == "admin_stories")
+async def admin_stories_list(callback: types.CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    text, kb = _stories_list_kb()
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm_story_toggle_"))
+async def admin_toggle_story(callback: types.CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    sid = int(callback.data.split("_")[3])
+    h = toggle_story_visibility(sid)
+    status = "скрыт" if h else "показан"
+    await callback.answer(f"Сюжет {status}")
+    text, kb = _stories_list_kb()
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+
+
+@router.callback_query(F.data.startswith("adm_story_delete_"))
+async def admin_delete_story(callback: types.CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    sid = int(callback.data.split("_")[3])
+    delete_story(sid)
+    await callback.answer("Сюжет удалён")
+    text, kb = _stories_list_kb()
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+
+
+@router.callback_query(F.data == "admin_add_story")
+async def admin_add_story_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    # Начинаем сразу с текста сюжета (без названия)
+    await state.set_state(AdminStoryStates.add_content)
+    await callback.message.answer("📝 Текст сюжета (можно длинный, будет разбит на экраны):")
+    await callback.answer()
+
+
+@router.message(AdminStoryStates.add_content, F.text)
+async def admin_add_story_content(message: types.Message, state: FSMContext):
+    await state.update_data(content=message.text.strip())
+    await state.set_state(AdminStoryStates.add_image)
+    await message.answer(
+        "🖼️ Отправь фото или URL изображения (или нажми «пропустить»):",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="💫 Пропустить", callback_data="admin_story_skip_image")]]
+        ),
+    )
+
+
+@router.callback_query(AdminStoryStates.add_image, F.data == "admin_story_skip_image")
+async def admin_story_skip_image(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    await state.update_data(image_url="")
+    # Сразу сохраняем сюжет без привязки к игре и порядка
+    data = await state.get_data()
+    content = data["content"]
+    # Название = весь текст сюжета
+    sid = add_story(
+        title=content,
+        content=content,
+        image_url="",
+        game_id=None,
+        order_num=0,
+    )
+    await state.clear()
+    await callback.message.edit_text(f"✓ Сюжет добавлен. ID: {sid}")
+    await callback.answer()
+
+
+@router.message(AdminStoryStates.add_image, F.text)
+async def admin_add_story_image(message: types.Message, state: FSMContext):
+    image_url = message.text.strip()
+    if image_url.lower() in ("пропустить", "-", ""):
+        image_url = ""
+    # Сразу сохраняем сюжет без привязки к игре и порядка
+    data = await state.get_data()
+    content = data["content"]
+    # Название = весь текст сюжета
+    sid = add_story(
+        title=content,
+        content=content,
+        image_url=image_url,
+        game_id=None,
+        order_num=0,
+    )
+    await state.clear()
+    await message.answer(f"✓ Сюжет добавлен. ID: {sid}")
+
+
+@router.message(AdminStoryStates.add_image, F.photo)
+async def admin_add_story_image_photo(message: types.Message, state: FSMContext):
+    """Обработка загрузки изображения через фото."""
+    # Получаем file_id самого большого фото - используем file_id напрямую
+    photo = message.photo[-1]
+    file_id = photo.file_id
+    # Сохраняем file_id вместо URL - Telegram может работать с file_id напрямую
+    await state.update_data(image_url=file_id)
+    # Сразу сохраняем сюжет без привязки к игре и порядка
+    data = await state.get_data()
+    content = data["content"]
+    # Название = весь текст сюжета
+    sid = add_story(
+        title=content,
+        content=content,
+        image_url=file_id,
+        game_id=None,
+        order_num=0,
+    )
+    await state.clear()
+    await message.answer(f"✓ Сюжет добавлен. ID: {sid}")
+
+

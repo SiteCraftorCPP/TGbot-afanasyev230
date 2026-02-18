@@ -22,10 +22,13 @@ async def question_save(message: types.Message, state: FSMContext):
         question_text=message.text,
     )
     await state.clear()
-    await message.answer("✅ Вопрос отправлен менеджеру. Ответим в ближайшее время!")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="menu_back")],
+    ])
+    await message.answer("✓ Вопрос отправлен менеджеру. Ответим в ближайшее время!", reply_markup=kb)
     # Публикация в чат операторов
     notify = (
-        f"❓ Вопрос\n"
+        f"💭 Вопрос\n"
         f"От: @{user.username or '—'} | {user.full_name or 'Без имени'}\n\n"
         f"{message.text}"
     )

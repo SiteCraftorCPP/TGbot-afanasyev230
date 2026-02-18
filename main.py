@@ -14,38 +14,36 @@ from handlers.format_funnel import router as format_router, format_show_screen
 from handlers.schedule import router as schedule_router
 from handlers.question import router as question_router
 from handlers.admin import router as admin_router
+from handlers.stories import router as stories_router
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+
+async def safe_answer_callback(callback: CallbackQuery):
+    """Безопасный ответ на callback query с обработкой ошибок."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass  # Игнорируем ошибки для старых/невалидных callback'ов
+
+
 @dp.callback_query(F.data == "menu_record")
 async def cb_menu_record(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
+    await safe_answer_callback(callback)
     await recording_start(callback, state)
 
 @dp.callback_query(F.data == "menu_format")
 async def cb_menu_format(callback: CallbackQuery):
-    await callback.answer()
+    await safe_answer_callback(callback)
     await format_show_screen(callback, 0)
 
-@dp.callback_query(F.data == "menu_chat")
-async def cb_menu_chat(callback: CallbackQuery):
-    await callback.answer()
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Вступить в чат", url=CHAT_LINK)],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="menu_back")],
-    ])
-    await callback.bot.edit_message_text(
-        chat_id=callback.message.chat.id,
-        message_id=callback.message.message_id,
-        text=f"Переходи в наш чат:\n\n👉 {CHAT_LINK}",
-        reply_markup=kb,
-    )
+# Обработчик menu_chat больше не нужен - кнопка теперь использует прямой URL
 
 @dp.callback_query(F.data == "menu_question")
 async def cb_menu_question(callback: CallbackQuery, state: FSMContext):
     from handlers.question import QuestionStates
-    await callback.answer()
+    await safe_answer_callback(callback)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 Назад", callback_data="question_back")],
     ])
@@ -59,7 +57,7 @@ async def cb_menu_question(callback: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "menu_schedule")
 async def cb_menu_schedule(callback: CallbackQuery):
     from handlers.schedule import get_schedule_content
-    await callback.answer()
+    await safe_answer_callback(callback)
     text, kb = get_schedule_content(with_back=True)
     await callback.bot.edit_message_text(
         chat_id=callback.message.chat.id,
@@ -72,7 +70,7 @@ async def cb_menu_schedule(callback: CallbackQuery):
 @dp.callback_query(F.data.startswith("adm_edit_"))
 async def cb_admin_edit_game(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
-        await callback.answer()
+        await safe_answer_callback(callback)
         return
     from handlers.admin import _game_edit_kb
     try:
@@ -95,16 +93,31 @@ async def cb_admin_edit_game(callback: CallbackQuery):
         reply_markup=kb,
     )
 
-@dp.callback_query(F.data.in_(["menu_back", "rback_game", "question_back"]))
+@dp.callback_query(F.data.in_(["menu_back", "question_back"]))
 async def cb_menu_back(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    await callback.answer()
-    await callback.bot.edit_message_text(
-        chat_id=callback.message.chat.id,
-        message_id=callback.message.message_id,
-        text=MENU_TEXT,
-        reply_markup=MENU_KB,
-    )
+    await safe_answer_callback(callback)
+    try:
+        await callback.bot.edit_message_text(
+            chat_id=callback.message.chat.id,
+            message_id=callback.message.message_id,
+            text=MENU_TEXT,
+            reply_markup=MENU_KB,
+        )
+    except Exception:
+        # Если не получилось отредактировать (например, было фото), удаляем и отправляем заново
+        try:
+            await callback.bot.delete_message(
+                chat_id=callback.message.chat.id,
+                message_id=callback.message.message_id,
+            )
+        except Exception:
+            pass
+        await callback.bot.send_message(
+            chat_id=callback.message.chat.id,
+            text=MENU_TEXT,
+            reply_markup=MENU_KB,
+        )
 
 dp.include_router(admin_router)  # первым — admin callbacks (adm_edit_, adm_ef_ и т.д.)
 dp.include_router(question_router)
@@ -112,6 +125,7 @@ dp.include_router(main_router)
 dp.include_router(recording_router)
 dp.include_router(format_router)
 dp.include_router(schedule_router)
+dp.include_router(stories_router)
 
 
 @dp.message(Command("start"))
@@ -137,7 +151,13 @@ async def main():
     from database import seed_demo_data
     seed_demo_data()
     print("Бот запущен. ADMIN_IDS:", ADMIN_IDS or "(пусто)")
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    except KeyboardInterrupt:
+        print("\nБот остановлен пользователем.")
+    except Exception as e:
+        print(f"Ошибка при работе бота: {e}")
+        raise
 
 
 if __name__ == "__main__":

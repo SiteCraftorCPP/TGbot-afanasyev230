@@ -25,10 +25,10 @@ def get_schedule_content(with_back: bool = False):
             if price:
                 line += f"\n   💰 {price}"
             lines.append(line)
-        text = "🗓 **Ближайшие игры:**\n\n" + "\n\n".join(lines)
+        text = "📆 **Ближайшие игры:**\n\n" + "\n\n".join(lines)
     kb = [
-        [InlineKeyboardButton(text="🎟 Записаться", callback_data="menu_record")],
-        [InlineKeyboardButton(text="🤝 Вступить в чат", url=CHAT_LINK)],
+        [InlineKeyboardButton(text="🎯 Записаться", callback_data="menu_record")],
+        [InlineKeyboardButton(text="💬 Вступить в чат", url=CHAT_LINK)],
     ]
     if with_back:
         kb.append([InlineKeyboardButton(text="🔙 Назад", callback_data="menu_back")])
