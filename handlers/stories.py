@@ -96,7 +96,9 @@ async def show_story_screen(bot, chat_id, message_id, story_id: int, screen_idx:
     reply_markup = InlineKeyboardMarkup(inline_keyboard=kb)
     
     # Отправка с изображением или без (подпись без Markdown — иначе API падает и фото не уходит)
-    if image_url and screen_idx == 0:
+    # Важно: если у сюжета есть фото — держим его на всех экранах, иначе при "Дальше"
+    # фото-сообщение пытались заменить на текст и получались дубли/пропажа фото.
+    if image_url:
         try:
             if edit:
                 try:

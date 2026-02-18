@@ -70,7 +70,15 @@ async def start_record(callback_or_msg, state: FSMContext):
             ]
         )
         if is_callback and bot:
-            await bot.edit_message_text(chat_id=msg.chat.id, message_id=msg.message_id, text=text, reply_markup=kb)
+            try:
+                await bot.edit_message_text(chat_id=msg.chat.id, message_id=msg.message_id, text=text, reply_markup=kb)
+            except Exception:
+                # Если вызвали из медиа-сообщения (например, из "Сюжеты"), edit_message_text упадёт.
+                try:
+                    await bot.delete_message(chat_id=msg.chat.id, message_id=msg.message_id)
+                except Exception:
+                    pass
+                await bot.send_message(chat_id=msg.chat.id, text=text, reply_markup=kb)
         else:
             await msg.answer(text, reply_markup=kb)
         await state.clear()
@@ -79,7 +87,14 @@ async def start_record(callback_or_msg, state: FSMContext):
     text = "Выбери игру/дату:"
     kb = _games_keyboard()
     if is_callback and bot:
-        await bot.edit_message_text(chat_id=msg.chat.id, message_id=msg.message_id, text=text, reply_markup=kb)
+        try:
+            await bot.edit_message_text(chat_id=msg.chat.id, message_id=msg.message_id, text=text, reply_markup=kb)
+        except Exception:
+            try:
+                await bot.delete_message(chat_id=msg.chat.id, message_id=msg.message_id)
+            except Exception:
+                pass
+            await bot.send_message(chat_id=msg.chat.id, text=text, reply_markup=kb)
     else:
         await msg.answer(text, reply_markup=kb)
     await state.set_state(RecordStates.choose_game)

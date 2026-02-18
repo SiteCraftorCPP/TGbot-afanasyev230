@@ -59,13 +59,30 @@ async def cb_menu_schedule(callback: CallbackQuery):
     from handlers.schedule import get_schedule_content
     await safe_answer_callback(callback)
     text, kb = get_schedule_content(with_back=True)
-    await callback.bot.edit_message_text(
-        chat_id=callback.message.chat.id,
-        message_id=callback.message.message_id,
-        text=text,
-        reply_markup=kb,
-        parse_mode="Markdown",
-    )
+    try:
+        await callback.bot.edit_message_text(
+            chat_id=callback.message.chat.id,
+            message_id=callback.message.message_id,
+            text=text,
+            reply_markup=kb,
+            parse_mode="Markdown",
+        )
+    except Exception:
+        # Если текущее сообщение — фото/медиа (например, из "Сюжеты"), редактирование текста упадёт.
+        # Тогда удаляем и отправляем расписание новым сообщением.
+        try:
+            await callback.bot.delete_message(
+                chat_id=callback.message.chat.id,
+                message_id=callback.message.message_id,
+            )
+        except Exception:
+            pass
+        await callback.bot.send_message(
+            chat_id=callback.message.chat.id,
+            text=text,
+            reply_markup=kb,
+            parse_mode="Markdown",
+        )
 
 @dp.callback_query(F.data.startswith("adm_edit_"))
 async def cb_admin_edit_game(callback: CallbackQuery):
