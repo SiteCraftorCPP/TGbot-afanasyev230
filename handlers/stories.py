@@ -56,9 +56,12 @@ async def show_story_screen(bot, chat_id, message_id, story_id: int, screen_idx:
         screen_idx = len(content_parts) - 1
     
     current_text = content_parts[screen_idx]
+    # Текстовые сообщения шлём с Markdown (жирный заголовок), а подпись к фото — без Markdown,
+    # чтобы не ловить артефакты вида "**Заголовок" при обрезке/символах.
     display_text = f"**{title}**\n\n{current_text}"
-    # Подпись к фото в Telegram — макс 1024 символа
-    caption_for_photo = (display_text[: CAPTION_MAX_LENGTH - 3] + "...") if len(display_text) > CAPTION_MAX_LENGTH else display_text
+    caption_plain = f"{title}\n\n{current_text}"
+    # Подпись к фото в Telegram — макс 1024 символа (режем без "..." по твоему запросу)
+    caption_for_photo = caption_plain[:CAPTION_MAX_LENGTH]
     
     # Кнопки
     kb = []
