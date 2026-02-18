@@ -1,9 +1,14 @@
+import logging
 from aiogram import Router, types, F
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
 from config import CHAT_LINK
 from database import get_visible_stories, get_story, get_visible_games
 
+logger = logging.getLogger(__name__)
 router = Router()
+
+# Лимит подписи к фото в Telegram
+CAPTION_MAX_LENGTH = 1024
 
 
 def _split_content(content: str, max_length: int = 1000):
@@ -42,6 +47,7 @@ async def show_story_screen(bot, chat_id, message_id, story_id: int, screen_idx:
         return False
     
     sid, title, content, image_url, game_id, order_num, hidden = story[:7]
+    image_url = (image_url or "").strip()
     
     # Разбиваем контент на части
     content_parts = _split_content(content)
@@ -51,6 +57,8 @@ async def show_story_screen(bot, chat_id, message_id, story_id: int, screen_idx:
     
     current_text = content_parts[screen_idx]
     display_text = f"**{title}**\n\n{current_text}"
+    # Подпись к фото в Telegram — макс 1024 символа
+    caption_for_photo = (display_text[: CAPTION_MAX_LENGTH - 3] + "...") if len(display_text) > CAPTION_MAX_LENGTH else display_text
     
     # Кнопки
     kb = []
@@ -84,43 +92,39 @@ async def show_story_screen(bot, chat_id, message_id, story_id: int, screen_idx:
     
     reply_markup = InlineKeyboardMarkup(inline_keyboard=kb)
     
-    # Отправка с изображением или без
-    # Используем file_id напрямую, если это file_id, иначе URL
-    if image_url and screen_idx == 0:  # Показываем изображение только на первом экране
+    # Отправка с изображением или без (подпись без Markdown — иначе API падает и фото не уходит)
+    if image_url and screen_idx == 0:
         try:
             if edit:
-                # Пытаемся отредактировать сообщение с фото
                 try:
                     await bot.edit_message_media(
                         chat_id=chat_id,
                         message_id=message_id,
-                        media=InputMediaPhoto(media=image_url, caption=display_text, parse_mode="Markdown"),
+                        media=InputMediaPhoto(media=image_url, caption=caption_for_photo),
                         reply_markup=reply_markup,
                     )
-                except Exception as e:
-                    # Если не получилось отредактировать (например, было текстовое сообщение), удаляем и отправляем заново
+                except Exception as e1:
+                    logger.debug("edit_message_media failed: %s", e1)
                     try:
                         await bot.delete_message(chat_id=chat_id, message_id=message_id)
                     except Exception:
                         pass
-                    # Отправляем новое сообщение с фото
-                    sent_msg = await bot.send_photo(
+                    await bot.send_photo(
                         chat_id=chat_id,
                         photo=image_url,
-                        caption=display_text,
+                        caption=caption_for_photo,
                         reply_markup=reply_markup,
-                        parse_mode="Markdown",
                     )
-                    return True  # Возвращаем True, так как сообщение отправлено
+                    return True
             else:
                 await bot.send_photo(
                     chat_id=chat_id,
                     photo=image_url,
-                    caption=display_text,
+                    caption=caption_for_photo,
                     reply_markup=reply_markup,
-                    parse_mode="Markdown",
                 )
         except Exception as e:
+            logger.warning("Story photo send failed story_id=%s image_url=%s: %s", story_id, (image_url[:30] if image_url else ""), e)
             # Если не удалось отправить фото, отправляем текст
             if edit:
                 try:

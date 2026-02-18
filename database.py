@@ -352,7 +352,7 @@ def get_visible_stories():
     cur = conn.cursor()
     cur.execute(
         "SELECT id, title, content, image_url, game_id, order_num "
-        "FROM stories WHERE hidden = 0 ORDER BY created_at"
+        "FROM stories WHERE hidden = 0 ORDER BY created_at DESC"
     )
     rows = cur.fetchall()
     conn.close()

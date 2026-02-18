@@ -635,6 +635,55 @@ async def admin_story_skip_image(callback: types.CallbackQuery, state: FSMContex
     await callback.answer()
 
 
+def _get_photo_file_id(message: types.Message) -> str | None:
+    """Строка file_id фото: из message.photo или из message.document (если изображение)."""
+    if message.photo:
+        return message.photo[-1].file_id
+    if message.document and message.document.mime_type and message.document.mime_type.startswith("image/"):
+        return message.document.file_id
+    return None
+
+
+@router.message(AdminStoryStates.add_image, F.photo)
+async def admin_add_story_image_photo(message: types.Message, state: FSMContext):
+    """Фото из галереи — сохраняем file_id в сюжет."""
+    file_id = _get_photo_file_id(message)
+    if not file_id:
+        await message.answer("Не удалось получить фото. Попробуй отправить ещё раз или нажми «Пропустить».")
+        return
+    data = await state.get_data()
+    content = data["content"]
+    sid = add_story(
+        title=content,
+        content=content,
+        image_url=file_id,
+        game_id=None,
+        order_num=0,
+    )
+    await state.clear()
+    await message.answer(f"✓ Сюжет добавлен (с фото). ID: {sid}")
+
+
+@router.message(AdminStoryStates.add_image, F.document)
+async def admin_add_story_image_document(message: types.Message, state: FSMContext):
+    """Фото, отправленное как файл/документ — тоже сохраняем как картинку сюжета."""
+    file_id = _get_photo_file_id(message)
+    if not file_id:
+        await message.answer("Отправь изображение (фото) или нажми «Пропустить». Другие файлы не подходят.")
+        return
+    data = await state.get_data()
+    content = data["content"]
+    sid = add_story(
+        title=content,
+        content=content,
+        image_url=file_id,
+        game_id=None,
+        order_num=0,
+    )
+    await state.clear()
+    await message.answer(f"✓ Сюжет добавлен (с фото). ID: {sid}")
+
+
 @router.message(AdminStoryStates.add_image, F.text)
 async def admin_add_story_image(message: types.Message, state: FSMContext):
     image_url = message.text.strip()
@@ -648,29 +697,6 @@ async def admin_add_story_image(message: types.Message, state: FSMContext):
         title=content,
         content=content,
         image_url=image_url,
-        game_id=None,
-        order_num=0,
-    )
-    await state.clear()
-    await message.answer(f"✓ Сюжет добавлен. ID: {sid}")
-
-
-@router.message(AdminStoryStates.add_image, F.photo)
-async def admin_add_story_image_photo(message: types.Message, state: FSMContext):
-    """Обработка загрузки изображения через фото."""
-    # Получаем file_id самого большого фото - используем file_id напрямую
-    photo = message.photo[-1]
-    file_id = photo.file_id
-    # Сохраняем file_id вместо URL - Telegram может работать с file_id напрямую
-    await state.update_data(image_url=file_id)
-    # Сразу сохраняем сюжет без привязки к игре и порядка
-    data = await state.get_data()
-    content = data["content"]
-    # Название = весь текст сюжета
-    sid = add_story(
-        title=content,
-        content=content,
-        image_url=file_id,
         game_id=None,
         order_num=0,
     )
