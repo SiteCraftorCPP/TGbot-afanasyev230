@@ -11,29 +11,6 @@ router = Router()
 CAPTION_MAX_LENGTH = 1024
 
 
-def _split_content(content: str, max_length: int = 1000):
-    """Разбивает длинный текст на части для отображения на разных экранах."""
-    if len(content) <= max_length:
-        return [content]
-    
-    parts = []
-    sentences = content.split('. ')
-    current_part = ""
-    
-    for sentence in sentences:
-        if len(current_part) + len(sentence) + 2 <= max_length:
-            current_part += sentence + ". " if sentence else sentence
-        else:
-            if current_part:
-                parts.append(current_part.strip())
-            current_part = sentence + ". " if sentence else sentence
-    
-    if current_part:
-        parts.append(current_part.strip())
-    
-    return parts if parts else [content]
-
-
 async def show_story_screen(bot, chat_id, message_id, story_id: int, screen_idx: int = 0, edit: bool = True, back_callback: str = "stories_back", story_index: int = None, total_stories: int = None):
     """Показать экран сюжета.
     
@@ -49,30 +26,16 @@ async def show_story_screen(bot, chat_id, message_id, story_id: int, screen_idx:
     sid, title, content, image_url, game_id, order_num, hidden = story[:7]
     image_url = (image_url or "").strip()
     
-    # Разбиваем контент на части
-    content_parts = _split_content(content)
-    
-    if screen_idx >= len(content_parts):
-        screen_idx = len(content_parts) - 1
-    
-    current_text = content_parts[screen_idx]
-    # Текстовые сообщения шлём с Markdown (жирный заголовок), а подпись к фото — без Markdown,
-    # чтобы не ловить артефакты вида "**Заголовок" при обрезке/символах.
-    display_text = f"**{title}**\n\n{current_text}"
-    caption_plain = f"{title}\n\n{current_text}"
-    # Подпись к фото в Telegram — макс 1024 символа (режем без "..." по твоему запросу)
+    # Текст целиком в одном сообщении, без разбиения на страницы
+    display_text = f"**{title}**\n\n{content}"
+    caption_plain = f"{title}\n\n{content}"
+    # Лимит Telegram: сообщение до 4096, подпись к фото — 1024
+    if len(display_text) > 4096:
+        display_text = display_text[:4093] + "..."
     caption_for_photo = caption_plain[:CAPTION_MAX_LENGTH]
     
-    # Кнопки
+    # Кнопки (без "Дальше" по тексту — всё в одном экране)
     kb = []
-    
-    # Кнопки для переключения между экранами сюжета
-    if screen_idx < len(content_parts) - 1:
-        # Для следующего экрана используем тот же back_callback
-        if back_callback != "stories_back":
-            kb.append([InlineKeyboardButton(text="✨ Дальше", callback_data=f"rstory_{sid}_{screen_idx + 1}")])
-        else:
-            kb.append([InlineKeyboardButton(text="✨ Дальше", callback_data=f"story_{sid}_{screen_idx + 1}")])
     
     # Кнопки для переключения между сюжетами (если указаны индексы)
     if story_index is not None and total_stories is not None and total_stories > 1:

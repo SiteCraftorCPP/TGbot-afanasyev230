@@ -63,17 +63,18 @@ SCREENS = [
 
 
 def cta_keyboard(screen_idx: int):
-    """screen_idx: текущий экран. Назад: на предыдущий экран (0 -> в меню)."""
-    kb = [
+    """Единый порядок кнопок на всех экранах: Видео → Дальше → Записаться/Расписание → Чат → Назад."""
+    kb = []
+    kb.append([InlineKeyboardButton(text="🎬 Посмотреть видео", url=VIDEO_URL)])
+    if screen_idx < len(SCREENS) - 1:
+        kb.append([InlineKeyboardButton(text="✨ Дальше", callback_data=f"format_{screen_idx + 1}")])
+    kb.extend([
         [
             InlineKeyboardButton(text="🎯 Записаться", callback_data="menu_record"),
             InlineKeyboardButton(text="📆 Расписание", callback_data="menu_schedule"),
         ],
         [InlineKeyboardButton(text="💬 Вступить в чат", url=CHAT_LINK)],
-    ]
-    # Добавляем кнопку "Посмотреть видео" на экраны: 0 (Что за формат?), 1 (Не с кем?), 2 (Знакомства без кринжа)
-    if screen_idx in [0, 1, 2]:
-        kb.insert(0, [InlineKeyboardButton(text="🎬 Посмотреть видео", url=VIDEO_URL)])
+    ])
     back_data = "menu_back" if screen_idx == 0 else f"format_{screen_idx - 1}"
     kb.append([InlineKeyboardButton(text="🔙 Назад", callback_data=back_data)])
     return InlineKeyboardMarkup(inline_keyboard=kb)
@@ -86,12 +87,6 @@ async def format_show_screen(target, screen_idx: int):
     s = SCREENS[screen_idx]
     text = f"**{s['title']}**\n\n{s['text']}"
     kb = cta_keyboard(screen_idx)
-    if screen_idx < len(SCREENS) - 1:
-        # На первом экране кнопку "Дальше" делаем более заметной - добавляем в начало
-        if screen_idx == 0:
-            kb.inline_keyboard.insert(1, [InlineKeyboardButton(text="✨ Дальше", callback_data=f"format_{screen_idx + 1}")])
-        else:
-            kb.inline_keyboard.insert(-1, [InlineKeyboardButton(text="✨ Дальше", callback_data=f"format_{screen_idx + 1}")])
     if hasattr(target, "bot") and hasattr(target, "message"):
         await target.bot.edit_message_text(
             chat_id=target.message.chat.id,

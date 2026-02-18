@@ -121,6 +121,7 @@ async def record_choose_game(callback: types.CallbackQuery, state: FSMContext):
     
     # Убрали привязку к игре - больше не проверяем сюжеты для конкретной игры
     
+    kb = _count_keyboard()
     await callback.bot.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,

@@ -114,27 +114,20 @@ async def cb_admin_edit_game(callback: CallbackQuery):
 async def cb_menu_back(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await safe_answer_callback(callback)
+    # Всегда удаляем текущее сообщение (может быть фото из сюжета — edit_message_text по нему падает),
+    # затем отправляем меню новым сообщением. Так «Назад» гарантированно срабатывает.
     try:
-        await callback.bot.edit_message_text(
+        await callback.bot.delete_message(
             chat_id=callback.message.chat.id,
             message_id=callback.message.message_id,
-            text=MENU_TEXT,
-            reply_markup=MENU_KB,
         )
     except Exception:
-        # Если не получилось отредактировать (например, было фото), удаляем и отправляем заново
-        try:
-            await callback.bot.delete_message(
-                chat_id=callback.message.chat.id,
-                message_id=callback.message.message_id,
-            )
-        except Exception:
-            pass
-        await callback.bot.send_message(
-            chat_id=callback.message.chat.id,
-            text=MENU_TEXT,
-            reply_markup=MENU_KB,
-        )
+        pass
+    await callback.bot.send_message(
+        chat_id=callback.message.chat.id,
+        text=MENU_TEXT,
+        reply_markup=MENU_KB,
+    )
 
 dp.include_router(admin_router)  # первым — admin callbacks (adm_edit_, adm_ef_ и т.д.)
 dp.include_router(question_router)
