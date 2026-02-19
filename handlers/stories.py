@@ -2,7 +2,7 @@ import logging
 from aiogram import Router, types, F
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
 from config import CHAT_LINK
-from database import get_visible_stories, get_story, get_visible_games
+from database import get_visible_stories, get_story, get_visible_games, get_scenarios, get_stories_by_scenario
 
 logger = logging.getLogger(__name__)
 router = Router()

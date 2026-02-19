@@ -91,7 +91,34 @@ def create_tables():
         order_num INTEGER DEFAULT 0,
         hidden INTEGER DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (game_id) REFERENCES games(id)
+        scenario_id INTEGER,
+        FOREIGN KEY (game_id) REFERENCES games(id),
+        FOREIGN KEY (scenario_id) REFERENCES scenarios(id)
+    )
+    """)
+
+    # Миграция: добавляем scenario_id, если его нет
+    try:
+        cur.execute("ALTER TABLE stories ADD COLUMN scenario_id INTEGER REFERENCES scenarios(id)")
+    except sqlite3.OperationalError:
+        pass  # Колонка уже есть
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS scenarios (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        description TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS format_screens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        text TEXT NOT NULL,
+        order_num INTEGER DEFAULT 0,
+        video_url TEXT
     )
     """)
 
@@ -100,6 +127,8 @@ def create_tables():
     
     conn.commit()
     conn.close()
+
+    seed_format_screens()
 
 
 def seed_demo_data():
@@ -153,6 +182,27 @@ def seed_demo_data():
             "INSERT INTO questions (tg_id, username, name, question_text) VALUES (?, ?, ?, ?)",
             q,
         )
+
+    # Scenarios & Stories
+    scenarios = [
+        ("Завещание Флинта", "Пиратская история с поиском сокровищ"),
+        ("Где-то на Диком Западе", "Ковбои, шериф и ограбление банка"),
+        ("Тайна «Восточного экспресса»", "Детектив в поезде"),
+    ]
+    
+    for s in scenarios:
+        cur.execute("INSERT INTO scenarios (name, description) VALUES (?, ?)", s)
+        sid = cur.lastrowid
+        
+        # Добавляем по 3 сюжета в каждый сценарий
+        for i in range(1, 4):
+            title = f"Глава {i}: Начало истории {s[0]}"
+            content = f"Это текст сюжетной линии {i} для сценария «{s[0]}». Здесь описывается завязка, развитие событий и интрига. Игрок должен погрузиться в атмосферу."
+            cur.execute(
+                """INSERT INTO stories (title, content, image_url, game_id, order_num, hidden, scenario_id)
+                   VALUES (?, ?, ?, ?, ?, 0, ?)""",
+                (title, content, "", None, i-1, sid),
+            )
 
     conn.commit()
     conn.close()
@@ -382,14 +432,14 @@ def get_story(story_id: int):
     return row
 
 
-def add_story(title, content, image_url=None, game_id=None, order_num=0):
+def add_story(title, content, image_url=None, game_id=None, order_num=0, scenario_id=None):
     """Добавить новый сюжет."""
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        """INSERT INTO stories (title, content, image_url, game_id, order_num, hidden)
-           VALUES (?, ?, ?, ?, ?, 0)""",
-        (title, content or "", image_url or "", game_id, order_num or 0),
+        """INSERT INTO stories (title, content, image_url, game_id, order_num, hidden, scenario_id)
+           VALUES (?, ?, ?, ?, ?, 0, ?)""",
+        (title, content or "", image_url or "", game_id, order_num or 0, scenario_id),
     )
     sid = cur.lastrowid
     conn.commit()
@@ -428,5 +478,128 @@ def delete_story(story_id: int):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("DELETE FROM stories WHERE id = ?", (story_id,))
+    conn.commit()
+    conn.close()
+
+
+# --- Scenarios ---
+
+def add_scenario(name, description=""):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO scenarios (name, description) VALUES (?, ?)", (name, description))
+    sid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return sid
+
+
+def get_scenarios():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT id, name, description FROM scenarios ORDER BY created_at")
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def get_scenario(sid):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT id, name, description FROM scenarios WHERE id = ?", (sid,))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def update_scenario(sid, name, description):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE scenarios SET name = ?, description = ? WHERE id = ?", (name, description, sid))
+    conn.commit()
+    conn.close()
+
+
+def delete_scenario(sid):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM stories WHERE scenario_id = ?", (sid,))
+    cur.execute("DELETE FROM scenarios WHERE id = ?", (sid,))
+    conn.commit()
+    conn.close()
+
+
+def get_stories_by_scenario(scenario_id):
+    """Получить сюжеты конкретного сценария."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, title, content, image_url, game_id, order_num, hidden, scenario_id "
+        "FROM stories WHERE scenario_id = ? ORDER BY order_num, created_at",
+        (scenario_id,)
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+# --- Format Screens ---
+
+def get_format_screens():
+    conn = get_conn()
+    cur = conn.cursor()
+    # Проверяем наличие таблицы (на случай если миграция не прошла)
+    try:
+        cur.execute("SELECT id, title, text, video_url FROM format_screens ORDER BY order_num")
+        rows = cur.fetchall()
+    except sqlite3.OperationalError:
+        return []
+    conn.close()
+    return rows
+
+
+def update_format_screen(sid, title, text, video_url=None):
+    conn = get_conn()
+    cur = conn.cursor()
+    if video_url is not None:
+        cur.execute("UPDATE format_screens SET title = ?, text = ?, video_url = ? WHERE id = ?", (title, text, video_url, sid))
+    else:
+        cur.execute("UPDATE format_screens SET title = ?, text = ? WHERE id = ?", (title, text, sid))
+    conn.commit()
+    conn.close()
+
+
+def seed_format_screens():
+    """Заполняет экраны формата, если пусто."""
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT COUNT(*) FROM format_screens")
+        if cur.fetchone()[0] > 0:
+            conn.close()
+            return
+    except sqlite3.OperationalError:
+        conn.close()
+        return
+
+    # Данные из handlers/format_funnel.py
+    screens = [
+        ("Что за формат?", "Сюжетная игра (ролевой квест) — это как фильм, только ты внутри истории.\n\nТебе дают роль и цель, дальше события разворачиваются через общение и решения. Ведущий всё ведёт и помогает."),
+        ("Не с кем?", "Если не с кем выбраться в люди — это идеальный формат.\n\nМожно прийти одному/одной: тебя мягко включат в игру, и компания появляется сама."),
+        ("Знакомства без кринжа", "Здесь не нужно «знакомиться специально».\n\nЕсть сюжет и общая задача — разговор начинается сам, и всё получается естественно."),
+        ("Надоело одно и то же", "Если устал(а) от «бар/кино/просто посидеть» — это другой уровень досуга.\n\nВместо фона — эмоции, интрига, смех и ощущение «вау, было не как обычно»."),
+        ("Я не умею / я интроверт", "Никакого опыта не нужно. Не надо быть актёром и «играть роль».\n\nПравила простые, включиться можно спокойно — ведущий подскажет, как комфортно участвовать."),
+        ("Хочу свою тусовку в ЕКБ", "Мы собираем комьюнити в Екатеринбурге: регулярные встречи и «свои» люди.\n\nМожно просто вступить в чат, познакомиться и выбрать удобную дату."),
+        ("Готов(а) попробовать?", "Частая реакция после первой игры:\n«Пришёл(ла) без ожиданий — втянулся(ась) за 10 минут и ушёл(ла) с новыми знакомыми».\n\nГотов(а) попробовать? Выбирай: записаться на ближайшую игру или зайти в чат.")
+    ]
+    
+    video_url = "https://www.youtube.com/watch?v=x3Ir917gDiM&list=PLDqVqfBsY9O-fPcm-pK-TpYWfnuJWSBFI"
+    
+    for i, (title, text) in enumerate(screens):
+        v_url = video_url if i in [0, 1, 2] else None
+        cur.execute(
+            "INSERT INTO format_screens (title, text, order_num, video_url) VALUES (?, ?, ?, ?)",
+            (title, text, i, v_url)
+        )
     conn.commit()
     conn.close()

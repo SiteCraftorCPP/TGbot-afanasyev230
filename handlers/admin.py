@@ -22,6 +22,14 @@ from database import (
     toggle_story_visibility,
     delete_story,
     get_visible_games,
+    add_scenario,
+    get_scenarios,
+    get_scenario,
+    update_scenario,
+    delete_scenario,
+    get_stories_by_scenario,
+    get_format_screens,
+    update_format_screen,
 )
 
 router = Router()
@@ -45,6 +53,19 @@ class AdminStoryStates(StatesGroup):
     add_image = State()
     edit_story = State()
     edit_field = State()
+    choose_scenario = State()  # Выбор сценария при добавлении сюжета
+
+
+class AdminScenarioStates(StatesGroup):
+    add_name = State()
+    add_desc = State()
+    edit_name = State()
+    edit_desc = State()
+
+
+class AdminFormatStates(StatesGroup):
+    edit_text = State()
+
 
 
 def _admin_only(func):
