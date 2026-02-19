@@ -6,7 +6,7 @@ from aiogram.fsm.context import FSMContext
 
 from config import BOT_TOKEN, ADMIN_IDS, CHAT_LINK
 from database import get_game
-from database import create_tables, save_user_utm
+from database import create_tables, save_user_utm, add_subscription, add_subscription
 from keyboards import MENU_KB, MENU_TEXT
 from handlers.main import router as main_router
 from handlers.recording import router as recording_router, start_record as recording_start
@@ -15,6 +15,7 @@ from handlers.schedule import router as schedule_router
 from handlers.question import router as question_router
 from handlers.admin import router as admin_router
 from handlers.stories import router as stories_router
+from handlers.holiday_quest import router as holiday_router
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -36,7 +37,7 @@ async def cb_menu_record(callback: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "menu_format")
 async def cb_menu_format(callback: CallbackQuery):
     await safe_answer_callback(callback)
-    await format_show_screen(callback, 0)
+    await format_show_screen(callback)
 
 # Обработчик menu_chat больше не нужен - кнопка теперь использует прямой URL
 
@@ -131,6 +132,7 @@ async def cb_menu_back(callback: CallbackQuery, state: FSMContext):
 
 dp.include_router(admin_router)  # первым — admin callbacks (adm_edit_, adm_ef_ и т.д.)
 dp.include_router(question_router)
+dp.include_router(holiday_router)
 dp.include_router(main_router)
 dp.include_router(recording_router)
 dp.include_router(format_router)
@@ -141,6 +143,17 @@ dp.include_router(stories_router)
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     user = message.from_user
+    add_subscription(
+        user.id,
+        username=user.username,
+        first_name=user.first_name,
+        last_name=user.last_name,
+    )
+    try:
+        from sheets import append_subscription as sheet_sub
+        sheet_sub(user.id, user.username, user.first_name, user.last_name)
+    except Exception:
+        pass
     utm = {}
     if message.text and message.text.startswith("/start ") and len(message.text.split()) >= 2:
         args = message.text.split(maxsplit=1)[1]

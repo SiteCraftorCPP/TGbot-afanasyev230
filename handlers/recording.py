@@ -218,10 +218,11 @@ async def record_choose_count(callback: types.CallbackQuery, state: FSMContext):
     cnt = callback.data.split("_")[1]
     cnt_int = 5 if cnt == "5" else int(cnt)
     await state.update_data(participants_count=cnt_int)
+    await state.set_state(RecordStates.get_contact)
     await callback.bot.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        text="Оставь контакт для связи с менеджером.",
+        text="Оставь контакт для связи с менеджером (номер или имя).",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [InlineKeyboardButton(text="💫 Пропустить", callback_data="rskip_contact")],
@@ -229,14 +230,7 @@ async def record_choose_count(callback: types.CallbackQuery, state: FSMContext):
             ]
         ),
     )
-    await state.set_state(RecordStates.get_contact)
     await safe_answer_callback(callback)
-
-
-@router.message(RecordStates.get_contact, F.contact)
-async def record_contact_shared(message: types.Message, state: FSMContext):
-    phone = message.contact.phone_number if message.contact else ""
-    await _record_got_contact(message, state, phone)
 
 
 @router.message(RecordStates.get_contact, F.text)
@@ -299,7 +293,7 @@ async def record_back_comment(callback: types.CallbackQuery, state: FSMContext):
     await callback.bot.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        text="Оставь контакт для связи с менеджером.",
+        text="Оставь контакт для связи с менеджером (номер или имя).",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [InlineKeyboardButton(text="💫 Пропустить", callback_data="rskip_contact")],
@@ -384,9 +378,18 @@ async def record_confirm_yes(callback: types.CallbackQuery, state: FSMContext):
         utm_medium=data.get("utm_medium") or utm.get("utm_medium"),
         utm_campaign=data.get("utm_campaign") or utm.get("utm_campaign"),
     )
+    try:
+        from sheets import append_lead as sheet_lead
+        sheet_lead(
+            user.id, user.username, user.full_name or "",
+            data.get("phone"), data.get("game_name"),
+            data.get("participants_count", 1), data.get("comment"),
+        )
+    except Exception:
+        pass
     await state.clear()
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="menu_back")],
+                [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="menu_back")],
     ])
     await callback.bot.edit_message_text(
         chat_id=callback.message.chat.id,
@@ -421,7 +424,7 @@ async def record_confirm_yes(callback: types.CallbackQuery, state: FSMContext):
 async def record_confirm_no(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="menu_back")],
+                [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="menu_back")],
     ])
     await callback.bot.edit_message_text(
         chat_id=callback.message.chat.id,

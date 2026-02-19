@@ -62,6 +62,17 @@ def create_tables():
     """)
 
     cur.execute("""
+    CREATE TABLE IF NOT EXISTS holiday_orders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tg_id INTEGER NOT NULL,
+        username TEXT,
+        name TEXT NOT NULL,
+        phone TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    cur.execute("""
     CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
         value TEXT
@@ -78,6 +89,17 @@ def create_tables():
         utm_medium TEXT,
         utm_campaign TEXT,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS subscriptions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tg_id INTEGER NOT NULL UNIQUE,
+        username TEXT,
+        first_name TEXT,
+        last_name TEXT,
+        started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
 
@@ -121,6 +143,17 @@ def create_tables():
         video_url TEXT
     )
     """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS format_info (
+        id INTEGER PRIMARY KEY DEFAULT 1,
+        text TEXT NOT NULL,
+        image_url TEXT
+    )
+    """)
+    
+    # Создаём запись по умолчанию, если её нет
+    cur.execute("INSERT OR IGNORE INTO format_info (id, text) VALUES (1, 'Сюжетная игра (ролевой квест) — это как фильм, только ты внутри истории.\n\nТебе дают роль и цель, дальше события разворачиваются через общение и решения. Ведущий всё ведёт и помогает.')")
 
     # Исправляем существующие сюжеты: если hidden NULL (старые записи), делаем видимым
     cur.execute("UPDATE stories SET hidden = 0 WHERE hidden IS NULL")
@@ -355,6 +388,31 @@ def add_question(tg_id, username, name, question_text):
     return qid
 
 
+def add_holiday_order(tg_id, username, name, phone):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO holiday_orders (tg_id, username, name, phone) VALUES (?, ?, ?, ?)",
+        (tg_id, username or "", name or "", phone or ""),
+    )
+    oid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return oid
+
+
+def get_holiday_orders(limit=10000):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, tg_id, username, name, phone, created_at FROM holiday_orders ORDER BY created_at DESC LIMIT ?",
+        (limit,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
 # Settings
 def get_setting(key: str, default="0"):
     conn = get_conn()
@@ -376,6 +434,32 @@ def save_user_utm(tg_id: int, utm_source=None, utm_medium=None, utm_campaign=Non
     )
     conn.commit()
     conn.close()
+
+
+def add_subscription(tg_id: int, username: str = None, first_name: str = None, last_name: str = None):
+    """Первый контакт: кто нажал /start. INSERT OR IGNORE — один раз на пользователя."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT OR IGNORE INTO subscriptions (tg_id, username, first_name, last_name)
+           VALUES (?, ?, ?, ?)""",
+        (tg_id, username or "", first_name or "", last_name or ""),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_subscriptions(limit=10000):
+    """Список подписок (первый контакт) для экспорта."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT tg_id, username, first_name, last_name, started_at FROM subscriptions ORDER BY started_at DESC LIMIT ?",
+        (limit,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
 
 
 def get_user_utm(tg_id: int):
@@ -569,6 +653,40 @@ def update_format_screen(sid, title, text, video_url=None):
     conn.close()
 
 
+# --- Format Info (один экран "Что это за формат?") ---
+
+def get_format_info():
+    """Получить информацию о формате (один экран)."""
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT text, image_url FROM format_info WHERE id = 1")
+        row = cur.fetchone()
+    except sqlite3.OperationalError:
+        conn.close()
+        return None, None
+    conn.close()
+    if row:
+        return row[0], row[1]
+    return None, None
+
+
+def update_format_info(text=None, image_url=None):
+    """Обновить информацию о формате. Можно обновлять только text или только image_url."""
+    conn = get_conn()
+    cur = conn.cursor()
+    
+    if text is not None and image_url is not None:
+        cur.execute("UPDATE format_info SET text = ?, image_url = ? WHERE id = 1", (text, image_url))
+    elif text is not None:
+        cur.execute("UPDATE format_info SET text = ? WHERE id = 1", (text,))
+    elif image_url is not None:
+        cur.execute("UPDATE format_info SET image_url = ? WHERE id = 1", (image_url,))
+    
+    conn.commit()
+    conn.close()
+
+
 def seed_format_screens():
     """Заполняет экраны формата, если пусто."""
     conn = get_conn()
@@ -602,4 +720,43 @@ def seed_format_screens():
             (title, text, i, v_url)
         )
     conn.commit()
+    conn.close()
+
+
+def swap_story_order(story_id, direction):
+    """Меняет порядок сюжета (direction: 'up' или 'down')."""
+    conn = get_conn()
+    cur = conn.cursor()
+    
+    # Получаем текущий сюжет
+    cur.execute("SELECT id, order_num, scenario_id FROM stories WHERE id = ?", (story_id,))
+    current = cur.fetchone()
+    if not current:
+        conn.close()
+        return
+        
+    sid, order_num, scenario_id = current
+    
+    # Ищем соседа
+    if direction == 'up':
+        # Тот, у кого order_num меньше текущего (максимальный из меньших)
+        cur.execute(
+            "SELECT id, order_num FROM stories WHERE scenario_id = ? AND order_num < ? ORDER BY order_num DESC LIMIT 1",
+            (scenario_id, order_num)
+        )
+    else: # down
+        # Тот, у кого order_num больше текущего (минимальный из больших)
+        cur.execute(
+            "SELECT id, order_num FROM stories WHERE scenario_id = ? AND order_num > ? ORDER BY order_num ASC LIMIT 1",
+            (scenario_id, order_num)
+        )
+        
+    neighbor = cur.fetchone()
+    if neighbor:
+        nid, n_order = neighbor
+        # Меняем местами order_num
+        cur.execute("UPDATE stories SET order_num = ? WHERE id = ?", (n_order, sid))
+        cur.execute("UPDATE stories SET order_num = ? WHERE id = ?", (order_num, nid))
+        conn.commit()
+        
     conn.close()

@@ -2,7 +2,7 @@ import logging
 from aiogram import Router, types, F
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
 from config import CHAT_LINK
-from database import get_visible_stories, get_story, get_visible_games, get_scenarios, get_stories_by_scenario
+from database import get_story, get_scenarios, get_stories_by_scenario
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -11,49 +11,94 @@ router = Router()
 CAPTION_MAX_LENGTH = 1024
 
 
-async def show_story_screen(bot, chat_id, message_id, story_id: int, screen_idx: int = 0, edit: bool = True, back_callback: str = "stories_back", story_index: int = None, total_stories: int = None):
-    """Показать экран сюжета.
+async def show_scenarios_list(callback: types.CallbackQuery):
+    """Показать список сценариев кнопками."""
+    scenarios = get_scenarios()
+    
+    text = "📚 **Библиотека сценариев**"
+    if not scenarios:
+        text = "Пока нет доступных сценариев."
+    
+    kb = []
+    for s in scenarios:
+        sid, name, desc = s
+        kb.append([InlineKeyboardButton(text=name, callback_data=f"story_scen_{sid}")])
+    
+    kb.append([InlineKeyboardButton(text="🔙 Назад в меню", callback_data="menu_back")])
+    
+    # Пытаемся редактировать или отправляем новое
+    try:
+        await callback.bot.edit_message_text(
+            chat_id=callback.message.chat.id,
+            message_id=callback.message.message_id,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=kb),
+            parse_mode="Markdown",
+        )
+    except Exception:
+        # Если было фото, удаляем и шлем новое
+        try:
+            await callback.bot.delete_message(
+                chat_id=callback.message.chat.id,
+                message_id=callback.message.message_id,
+            )
+        except Exception:
+            pass
+        await callback.bot.send_message(
+            chat_id=callback.message.chat.id,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=kb),
+            parse_mode="Markdown",
+        )
+
+
+async def show_story_screen(bot, chat_id, message_id, story_id: int, edit: bool = True, story_index: int = None, total_stories: int = None, scenario_id: int = None):
+    """Показать экран сюжетной линии сценария.
     
     Args:
-        back_callback: callback_data для кнопки "Назад" (по умолчанию "stories_back")
-        story_index: индекс текущего сюжета в списке (для переключения между сюжетами)
-        total_stories: всего сюжетов (для переключения между сюжетами)
+        story_id: ID сюжета
+        story_index: индекс текущего сюжета в сценарии (0-based)
+        total_stories: всего сюжетов в сценарии
+        scenario_id: ID сценария (для навигации)
     """
     story = get_story(story_id)
     if not story:
         return False
     
-    sid, title, content, image_url, game_id, order_num, hidden = story[:7]
+    # story: (id, title, content, image_url, game_id, order_num, hidden, scenario_id, created_at)
+    sid, title, content, image_url, game_id, order_num, hidden, scen_id = story[:8]
     image_url = (image_url or "").strip()
     
-    # Текст целиком в одном сообщении, без разбиения на страницы
+    # Текст целиком в одном сообщении
     display_text = f"**{title}**\n\n{content}"
     caption_plain = f"{title}\n\n{content}"
-    # Лимит Telegram: сообщение до 4096, подпись к фото — 1024
+    # Лимит Telegram
     if len(display_text) > 4096:
         display_text = display_text[:4093] + "..."
     caption_for_photo = caption_plain[:CAPTION_MAX_LENGTH]
     
-    # Кнопки (без "Дальше" по тексту — всё в одном экране)
+    # Кнопки навигации внутри сценария
     kb = []
     
-    # Кнопки для переключения между сюжетами (если указаны индексы)
-    if story_index is not None and total_stories is not None and total_stories > 1:
-        nav_buttons = []
+    nav_buttons = []
+    if story_index is not None and total_stories is not None and total_stories > 1 and scenario_id:
         if story_index > 0:
-            nav_buttons.append(InlineKeyboardButton(text="🔙 Предыдущий", callback_data=f"story_nav_{story_index - 1}"))
+            nav_buttons.append(InlineKeyboardButton(text="🔙 Назад", callback_data=f"story_nav_{scenario_id}_{story_index - 1}"))
         if story_index < total_stories - 1:
-            nav_buttons.append(InlineKeyboardButton(text="✨ Следующий", callback_data=f"story_nav_{story_index + 1}"))
-        if nav_buttons:
-            kb.append(nav_buttons)
+            nav_buttons.append(InlineKeyboardButton(text="✨ Дальше", callback_data=f"story_nav_{scenario_id}_{story_index + 1}"))
     
+    if nav_buttons:
+        kb.append(nav_buttons)
+    
+    # Кнопка "Все сценарии"
+    kb.append([InlineKeyboardButton(text="📚 Все сценарии", callback_data="menu_stories")])
+    
+    # Кнопки действий
     kb.extend([
         [
             InlineKeyboardButton(text="🎯 Записаться", callback_data="menu_record"),
             InlineKeyboardButton(text="📆 Расписание", callback_data="menu_schedule"),
         ],
-        [InlineKeyboardButton(text="💬 Вступить в чат", url=CHAT_LINK)],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data=back_callback)],
     ])
     
     reply_markup = InlineKeyboardMarkup(inline_keyboard=kb)
@@ -159,71 +204,64 @@ async def show_story_screen(bot, chat_id, message_id, story_id: int, screen_idx:
 
 @router.callback_query(F.data == "menu_stories")
 async def cb_stories_list(callback: types.CallbackQuery):
-    """Показать первый сюжет сразу, с возможностью листать."""
+    """Показать список сценариев."""
     try:
         await callback.answer()
     except Exception:
         pass
-    
-    stories = get_visible_stories()
-    if not stories:
-        text = "📖 Пока нет доступных сюжетов. Следи за обновлениями!"
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="menu_back")],
-        ])
-        try:
-            await callback.bot.edit_message_text(
-                chat_id=callback.message.chat.id,
-                message_id=callback.message.message_id,
-                text=text,
-                reply_markup=kb,
-            )
-        except Exception:
-            # Если не получилось отредактировать (например, было фото), удаляем и отправляем заново
-            try:
-                await callback.bot.delete_message(
-                    chat_id=callback.message.chat.id,
-                    message_id=callback.message.message_id,
-                )
-            except Exception:
-                pass
-            await callback.bot.send_message(
-                chat_id=callback.message.chat.id,
-                text=text,
-                reply_markup=kb,
-            )
+    await show_scenarios_list(callback)
+
+
+@router.callback_query(F.data.startswith("story_scen_"))
+async def cb_story_scenario(callback: types.CallbackQuery):
+    """Выбран сценарий -> показать первую сюжетную линию."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+        
+    try:
+        sid = int(callback.data.split("_")[2])
+    except ValueError:
         return
-    
-    # Показываем первый сюжет сразу
-    first_story_id = stories[0][0]
-    # При первом показе используем edit=True, но show_story_screen сам обработает случай с фото
+
+    stories = get_stories_by_scenario(sid)
+    if not stories:
+        await callback.answer("В этом сценарии пока нет сюжетов", show_alert=True)
+        return
+
+    first_story = stories[0]
     await show_story_screen(
         callback.bot,
         callback.message.chat.id,
         callback.message.message_id,
-        first_story_id,
-        screen_idx=0,
-        edit=True,  # Редактируем сообщение меню
-        back_callback="menu_back",
-        story_index=0,  # Индекс текущего сюжета в списке
-        total_stories=len(stories),  # Всего сюжетов
+        first_story[0],
+        edit=True,
+        story_index=0,
+        total_stories=len(stories),
+        scenario_id=sid
     )
 
 
 @router.callback_query(F.data.startswith("story_nav_"))
 async def cb_story_nav(callback: types.CallbackQuery):
-    """Переключение между сюжетами."""
+    """Навигация по сюжетным линиям внутри сценария."""
     try:
         await callback.answer()
     except Exception:
         pass
     
+    parts = callback.data.split("_")
+    if len(parts) < 4:
+        return
+    
     try:
-        story_index = int(callback.data.split("_")[2])
+        scenario_id = int(parts[2])
+        story_index = int(parts[3])
     except ValueError:
         return
     
-    stories = get_visible_stories()
+    stories = get_stories_by_scenario(scenario_id)
     if not stories or story_index < 0 or story_index >= len(stories):
         return
     
@@ -233,64 +271,8 @@ async def cb_story_nav(callback: types.CallbackQuery):
         callback.message.chat.id,
         callback.message.message_id,
         story_id,
-        screen_idx=0,
         edit=True,
-        back_callback="menu_back",
         story_index=story_index,
         total_stories=len(stories),
+        scenario_id=scenario_id
     )
-
-
-@router.callback_query(F.data.startswith("story_"))
-async def cb_story_screen(callback: types.CallbackQuery):
-    """Показать экран сюжета."""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-    
-    # Проверяем, что это не story_nav_
-    if callback.data.startswith("story_nav_"):
-        return
-    
-    parts = callback.data.split("_")
-    if len(parts) < 3:
-        return
-    
-    try:
-        story_id = int(parts[1])
-        screen_idx = int(parts[2])
-    except ValueError:
-        return
-    
-    # Получаем список сюжетов для определения индекса
-    stories = get_visible_stories()
-    story_index = None
-    for idx, s in enumerate(stories):
-        if s[0] == story_id:
-            story_index = idx
-            break
-    
-    await show_story_screen(
-        callback.bot,
-        callback.message.chat.id,
-        callback.message.message_id,
-        story_id,
-        screen_idx,
-        edit=True,
-        back_callback="menu_back",
-        story_index=story_index,
-        total_stories=len(stories) if stories else None,
-    )
-
-
-@router.callback_query(F.data == "stories_back")
-async def cb_stories_back(callback: types.CallbackQuery):
-    """Вернуться к списку сюжетов."""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-    
-    # Вызываем cb_stories_list, который правильно обработает случай с фото
-    await cb_stories_list(callback)
