@@ -120,7 +120,7 @@ async def cmd_admin(message: types.Message):
 
 def _games_list_kb():
     games = get_all_games()
-    text = "**Игры:**\n\n"
+    text = "Игры:\n\n"
     kb = []
     for g in games:
         gid, name, date, time, place, price, desc, limit, hidden = g
@@ -137,7 +137,7 @@ def _games_list_kb():
 
 def _schedule_edit_kb(games):
     """Расписание с кнопками редактирования."""
-    text = "**📆 Расписание (редактирование):**\n\n"
+    text = "📆 Расписание (редактирование):\n\n"
     kb = []
     for g in games:
         gid, name, date, time, place, price, desc, limit, hidden = g
@@ -766,7 +766,7 @@ async def admin_back(callback: types.CallbackQuery, state: FSMContext):
 
 def _scenarios_list_kb():
     scenarios = get_scenarios()
-    text = "**Сценарии:**\n\n"
+    text = "Сценарии:\n\n"
     kb = []
     for s in scenarios:
         sid, name, desc = s
@@ -874,7 +874,7 @@ def _scenario_stories_kb(scenario_id):
         return "Сценарий не найден", None
         
     stories = get_stories_by_scenario(scenario_id)
-    text = f"**Сюжеты сценария «{scenario[1]}»:**\n\n"
+    text = f"Сюжеты сценария «{scenario[1]}»:\n\n"
     kb = []
     
     if not stories:
@@ -1139,7 +1139,7 @@ async def _finish_add_story(message: types.Message, state: FSMContext):
 async def admin_format_edit(callback: types.CallbackQuery):
     text_db, image_url = get_format_info()
     
-    text = "**Редактирование «Что это за формат?»**\n\n"
+    text = "Редактирование «Что это за формат?»\n\n"
     if text_db:
         preview = (text_db[:100] + "...") if len(text_db) > 100 else text_db
         text += f"Текущий текст:\n{preview}\n\n"
@@ -1181,7 +1181,7 @@ async def admin_format_edit_text_save(message: types.Message, state: FSMContext)
     
     # Возвращаем меню редактирования
     text_db, image_url = get_format_info()
-    text = "**Редактирование «Что это за формат?»**\n\n"
+    text = "Редактирование «Что это за формат?»\n\n"
     if text_db:
         preview = (text_db[:100] + "...") if len(text_db) > 100 else text_db
         text += f"Текущий текст:\n{preview}\n\n"
@@ -1221,7 +1221,7 @@ async def admin_format_delete_img(callback: types.CallbackQuery, state: FSMConte
     
     # Возвращаем меню
     text_db, image_url = get_format_info()
-    text = "**Редактирование «Что это за формат?»**\n\n"
+    text = "Редактирование «Что это за формат?»\n\n"
     if text_db:
         preview = (text_db[:100] + "...") if len(text_db) > 100 else text_db
         text += f"Текущий текст:\n{preview}\n\n"
@@ -1258,7 +1258,7 @@ async def _admin_format_save_img(message: types.Message, state: FSMContext, file
     
     # Возвращаем меню
     text_db, image_url = get_format_info()
-    text = "**Редактирование «Что это за формат?»**\n\n"
+    text = "Редактирование «Что это за формат?»\n\n"
     if text_db:
         preview = (text_db[:100] + "...") if len(text_db) > 100 else text_db
         text += f"Текущий текст:\n{preview}\n\n"
@@ -1285,7 +1285,7 @@ async def admin_format_edit_img_text(message: types.Message, state: FSMContext):
     
     # Возвращаем меню
     text_db, image_url = get_format_info()
-    text = "**Редактирование «Что это за формат?»**\n\n"
+    text = "Редактирование «Что это за формат?»\n\n"
     if text_db:
         preview = (text_db[:100] + "...") if len(text_db) > 100 else text_db
         text += f"Текущий текст:\n{preview}\n\n"
