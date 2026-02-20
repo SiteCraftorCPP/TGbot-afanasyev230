@@ -1,3 +1,4 @@
+import asyncio
 import csv
 import io
 from aiogram import Router, types, F
@@ -18,6 +19,8 @@ from database import (
     get_leads,
     get_subscriptions,
     get_holiday_orders,
+    get_users_for_export,
+    get_users_for_broadcast,
     add_game,
     update_game,
     get_game,
@@ -79,6 +82,12 @@ class AdminScenarioStates(StatesGroup):
 class AdminFormatStates(StatesGroup):
     edit_text = State()
     edit_image = State()
+
+
+class AdminBroadcastStates(StatesGroup):
+    get_text = State()
+    get_media = State()
+    confirm = State()
 
 
 
@@ -516,81 +525,205 @@ async def admin_followup(callback: types.CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
         await callback.answer()
         return
-    cur = get_setting("follow_up_enabled", "1")
-    status = "вкл" if cur == "1" else "выкл"
+    users_count = len(get_users_for_broadcast("all"))
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="❌ Выключить" if cur == "1" else "✅ Включить",
-                    callback_data="admin_followup_toggle",
-                )
-            ],
-            [InlineKeyboardButton(text="📥 Экспорт подписок (CSV)", callback_data="admin_export_subscriptions")],
-            [InlineKeyboardButton(text="📥 Экспорт заявок (CSV)", callback_data="admin_export_leads")],
+            [InlineKeyboardButton(text="📥 Выгрузить пользователей (CSV)", callback_data="admin_export_users")],
+            [InlineKeyboardButton(text="📤 Рассылка", callback_data="admin_broadcast_start")],
             [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")],
         ]
     )
-    desc = (
-        "\n\n**Подписки** — все, кто нажал /start (первый контакт).\n"
-        "**Заявки** — кто прошёл запись на игру или заказ квеста на праздник (с телефоном).\n\n"
-        "Экспорт в CSV можно открыть в Excel или загрузить в Google Sheets и передать заказчику."
+    text = (
+        f"🔄 **Follow-up**\n\n"
+        f"Пользователей в базе: **{users_count}**\n\n"
+        f"• **Выгрузить** — таблица со всеми, кто хоть раз нажал кнопку в боте (tg_id, имя, активность, телефон).\n"
+        f"• **Рассылка** — отправить сообщение с текстом и/или медиа всем или по фильтру."
     )
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_export_users")
+async def admin_export_users(callback: types.CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    rows = get_users_for_export()
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["tg_id", "username", "first_name", "last_name", "first_seen", "last_seen", "event_count", "events_sample", "phone"])
+    for r in rows:
+        w.writerow(list(r))
+    buf.seek(0)
+    file = BufferedInputFile(buf.getvalue().encode("utf-8-sig"), filename="users.csv")
+    await callback.bot.send_document(callback.message.chat.id, file, caption=f"Пользователи ({len(rows)} записей)")
+    await callback.answer("Файл отправлен.")
+
+
+# --- Рассылка ---
+
+@router.callback_query(F.data == "admin_broadcast_start")
+async def admin_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    await state.set_state(AdminBroadcastStates.get_text)
+    await state.update_data(media_file_id=None)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_broadcast_cancel")]])
     await callback.message.edit_text(
-        f"🔄 **Follow-up**\n\nСообщения: **{status}**{desc}",
+        "📤 **Рассылка**\n\nВведите текст сообщения (можно Markdown). Или отправьте «-» чтобы только медиа:",
         reply_markup=kb,
         parse_mode="Markdown",
     )
     await callback.answer()
 
 
-@router.callback_query(F.data == "admin_export_subscriptions")
-async def admin_export_subscriptions(callback: types.CallbackQuery):
+@router.callback_query(F.data == "admin_broadcast_cancel")
+async def admin_broadcast_cancel(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
         await callback.answer()
         return
-    rows = get_subscriptions()
-    buf = io.StringIO()
-    w = csv.writer(buf)
-    w.writerow(["tg_id", "username", "first_name", "last_name", "started_at"])
-    for r in rows:
-        w.writerow(list(r))
-    buf.seek(0)
-    file = BufferedInputFile(buf.getvalue().encode("utf-8-sig"), filename="subscriptions.csv")
-    await callback.bot.send_document(callback.message.chat.id, file, caption="Подписки (первый контакт)")
-    await callback.answer("Файл отправлен.")
-
-
-@router.callback_query(F.data == "admin_export_leads")
-async def admin_export_leads(callback: types.CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS:
-        await callback.answer()
-        return
-    buf = io.StringIO()
-    w = csv.writer(buf)
-    w.writerow(["type", "tg_id", "username", "name", "phone", "game_name", "participants_count", "comment", "created_at"])
-    for row in get_leads(limit=100000):
-        # id, tg_id, username, name, phone, game_name, participants_count, comment, status, created_at
-        w.writerow(["игра", row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[9]])
-    for row in get_holiday_orders(limit=100000):
-        # id, tg_id, username, name, phone, created_at
-        w.writerow(["квест_праздник", row[1], row[2], row[3], row[4], "", "", "", row[5]])
-    buf.seek(0)
-    file = BufferedInputFile(buf.getvalue().encode("utf-8-sig"), filename="zayavki.csv")
-    await callback.bot.send_document(callback.message.chat.id, file, caption="Заявки (игры + квест на праздник)")
-    await callback.answer("Файл отправлен.")
-
-
-@router.callback_query(F.data == "admin_followup_toggle")
-async def admin_followup_toggle(callback: types.CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS:
-        await callback.answer()
-        return
-    cur = get_setting("follow_up_enabled", "1")
-    new = "0" if cur == "1" else "1"
-    set_setting("follow_up_enabled", new)
-    await callback.answer("Сохранено")
+    await state.clear()
     await admin_followup(callback)
+
+
+@router.message(AdminBroadcastStates.get_text, F.text)
+async def admin_broadcast_text(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    text = "" if (message.text or "").strip() == "-" else (message.text or "").strip()
+    await state.update_data(broadcast_text=text)
+    await state.set_state(AdminBroadcastStates.get_media)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏭ Пропустить медиа", callback_data="admin_broadcast_skip_media")],
+        [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_broadcast_cancel")],
+    ])
+    await message.answer("Отправьте фото или файл для прикрепления. Или нажмите «Пропустить»:", reply_markup=kb)
+
+
+@router.message(AdminBroadcastStates.get_text, F.photo)
+async def admin_broadcast_text_photo(message: types.Message, state: FSMContext):
+    """Фото с подписью — сразу текст и медиа."""
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    text = (message.caption or "").strip() if message.caption else ""
+    await state.update_data(broadcast_text=text, media_file_id=message.photo[-1].file_id, media_type="photo")
+    await state.set_state(AdminBroadcastStates.confirm)
+    await _admin_broadcast_confirm(message, state)
+
+
+@router.message(AdminBroadcastStates.get_media, F.photo)
+async def admin_broadcast_media_photo(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    file_id = message.photo[-1].file_id
+    await state.update_data(media_file_id=file_id, media_type="photo")
+    await state.set_state(AdminBroadcastStates.confirm)
+    await _admin_broadcast_confirm(message, state)
+
+
+@router.message(AdminBroadcastStates.get_media, F.document)
+async def admin_broadcast_media_doc(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    file_id = message.document.file_id
+    await state.update_data(media_file_id=file_id, media_type="document")
+    await state.set_state(AdminBroadcastStates.confirm)
+    await _admin_broadcast_confirm(message, state)
+
+
+@router.callback_query(AdminBroadcastStates.get_media, F.data == "admin_broadcast_skip_media")
+async def admin_broadcast_skip_media(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    await state.update_data(media_file_id=None, media_type=None)
+    await state.set_state(AdminBroadcastStates.confirm)
+    await _admin_broadcast_confirm(callback.message, state, callback)
+
+
+async def _admin_broadcast_confirm(msg_target, state: FSMContext, callback=None):
+    data = await state.get_data()
+    text = data.get("broadcast_text", "")
+    media_id = data.get("media_file_id")
+    media_type = data.get("media_type")
+    filter_type = data.get("broadcast_filter", "all")
+    user_ids = get_users_for_broadcast(filter_type)
+    count = len(user_ids)
+
+    if not text and not media_id:
+        err = "Добавьте текст или медиа."
+        if callback:
+            await callback.message.edit_text(err)
+            await callback.answer()
+        else:
+            await msg_target.answer(err)
+        return
+
+    preview = f"Текст: {text[:100]}..." if len(text) > 100 else f"Текст: {text or '(нет)'}"
+    if media_id:
+        preview += f"\nМедиа: {media_type}"
+    preview += f"\n\nПолучателей: **{count}**"
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="Всем", callback_data="admin_broadcast_filter_all"),
+            InlineKeyboardButton(text="С заявкой", callback_data="admin_broadcast_filter_with_lead"),
+            InlineKeyboardButton(text="Без заявки", callback_data="admin_broadcast_filter_without_lead"),
+        ],
+        [InlineKeyboardButton(text="✅ Отправить", callback_data="admin_broadcast_send")],
+        [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_broadcast_cancel")],
+    ])
+    if callback:
+        await callback.message.edit_text(f"📤 **Подтверждение рассылки**\n\n{preview}", reply_markup=kb, parse_mode="Markdown")
+        await callback.answer()
+    else:
+        await msg_target.answer(f"📤 **Подтверждение рассылки**\n\n{preview}", reply_markup=kb, parse_mode="Markdown")
+
+
+@router.callback_query(F.data.startswith("admin_broadcast_filter_"))
+async def admin_broadcast_filter(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    # admin_broadcast_filter_all -> all, admin_broadcast_filter_with_lead -> with_lead, etc.
+    f = callback.data.replace("admin_broadcast_filter_", "")
+    await state.update_data(broadcast_filter=f)
+    await _admin_broadcast_confirm(callback.message, state, callback)
+
+
+@router.callback_query(F.data == "admin_broadcast_send")
+async def admin_broadcast_send(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    data = await state.get_data()
+    text = data.get("broadcast_text", "")
+    media_id = data.get("media_file_id")
+    media_type = data.get("media_type")
+    if not text and not media_id:
+        await callback.answer("Добавьте текст или медиа.", show_alert=True)
+        return
+    filter_type = data.get("broadcast_filter", "all")
+    user_ids = get_users_for_broadcast(filter_type)
+    await state.clear()
+
+    await callback.message.edit_text(f"📤 Отправка {len(user_ids)} пользователям...")
+    sent, failed = 0, 0
+    for uid in user_ids:
+        try:
+            if media_id and media_type == "photo":
+                await callback.bot.send_photo(uid, photo=media_id, caption=text or None, parse_mode="Markdown" if text else None)
+            elif media_id and media_type == "document":
+                await callback.bot.send_document(uid, document=media_id, caption=text or None, parse_mode="Markdown" if text else None)
+            else:
+                await callback.bot.send_message(uid, text=text or "—", parse_mode="Markdown")
+            sent += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.05)
+    await callback.message.edit_text(f"✅ Рассылка завершена.\nОтправлено: {sent}, не доставлено: {failed}")
+    await callback.answer()
 
 
 @router.callback_query(F.data == "admin_back")

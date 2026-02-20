@@ -57,11 +57,6 @@ async def holiday_quest_phone(message: types.Message, state: FSMContext):
     await state.clear()
     user = message.from_user
     add_holiday_order(tg_id=user.id, username=user.username, name=name, phone=phone)
-    try:
-        from sheets import append_holiday_order as sheet_holiday
-        sheet_holiday(user.id, user.username, name, phone)
-    except Exception:
-        pass
     notify = (
         f"🎂 **Заявка: квест на праздник**\n\n"
         f"Имя: {name}\n"

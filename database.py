@@ -104,6 +104,18 @@ def create_tables():
     """)
 
     cur.execute("""
+    CREATE TABLE IF NOT EXISTS user_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tg_id INTEGER NOT NULL,
+        username TEXT,
+        first_name TEXT,
+        last_name TEXT,
+        event_type TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    cur.execute("""
     CREATE TABLE IF NOT EXISTS stories (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         title TEXT NOT NULL,
@@ -447,6 +459,69 @@ def add_subscription(tg_id: int, username: str = None, first_name: str = None, l
     )
     conn.commit()
     conn.close()
+
+
+def log_user_event(tg_id: int, username: str, first_name: str, last_name: str, event_type: str):
+    """Логирует действие пользователя (любая кнопка, сообщение)."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO user_events (tg_id, username, first_name, last_name, event_type)
+           VALUES (?, ?, ?, ?, ?)""",
+        (tg_id, username or "", first_name or "", last_name or "", event_type[:100]),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_users_for_export(limit=50000):
+    """Агрегат по пользователям: tg_id, username, first_name, last_name, first_seen, last_seen, event_count, events_sample, phone."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT tg_id, username, first_name, last_name,
+               MIN(created_at) as first_seen, MAX(created_at) as last_seen,
+               COUNT(*) as event_count,
+               GROUP_CONCAT(DISTINCT event_type) as events
+        FROM user_events
+        GROUP BY tg_id
+        ORDER BY last_seen DESC
+        LIMIT ?
+    """, (limit,))
+    rows = cur.fetchall()
+    # Дополняем phone из leads и holiday_orders
+    cur.execute("SELECT tg_id, phone FROM leads WHERE phone != '' AND phone IS NOT NULL")
+    lead_phones = {r[0]: r[1] for r in cur.fetchall()}
+    cur.execute("SELECT tg_id, phone FROM holiday_orders WHERE phone != '' AND phone IS NOT NULL")
+    for r in cur.fetchall():
+        if r[0] not in lead_phones:
+            lead_phones[r[0]] = r[1]
+    conn.close()
+    result = []
+    for r in rows:
+        tg_id, uname, fname, lname, first_seen, last_seen, cnt, events = r
+        phone = lead_phones.get(tg_id, "")
+        result.append((tg_id, uname, fname, lname, first_seen, last_seen, cnt, (events or "")[:200], phone))
+    return result
+
+
+def get_users_for_broadcast(filter_type: str = "all"):
+    """Список tg_id для рассылки. all | with_lead | without_lead."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT DISTINCT tg_id FROM user_events")
+    all_ids = {r[0] for r in cur.fetchall()}
+    if filter_type == "all":
+        conn.close()
+        return list(all_ids)
+    cur.execute("SELECT DISTINCT tg_id FROM leads")
+    lead_ids = {r[0] for r in cur.fetchall()}
+    cur.execute("SELECT DISTINCT tg_id FROM holiday_orders")
+    lead_ids.update(r[0] for r in cur.fetchall())
+    conn.close()
+    if filter_type == "with_lead":
+        return list(all_ids & lead_ids)
+    return list(all_ids - lead_ids)
 
 
 def get_subscriptions(limit=10000):

@@ -378,15 +378,6 @@ async def record_confirm_yes(callback: types.CallbackQuery, state: FSMContext):
         utm_medium=data.get("utm_medium") or utm.get("utm_medium"),
         utm_campaign=data.get("utm_campaign") or utm.get("utm_campaign"),
     )
-    try:
-        from sheets import append_lead as sheet_lead
-        sheet_lead(
-            user.id, user.username, user.full_name or "",
-            data.get("phone"), data.get("game_name"),
-            data.get("participants_count", 1), data.get("comment"),
-        )
-    except Exception:
-        pass
     await state.clear()
     kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="menu_back")],

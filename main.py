@@ -6,7 +6,8 @@ from aiogram.fsm.context import FSMContext
 
 from config import BOT_TOKEN, ADMIN_IDS, CHAT_LINK
 from database import get_game
-from database import create_tables, save_user_utm, add_subscription, add_subscription
+from database import create_tables, save_user_utm, add_subscription
+from middlewares.user_log import UserLogMiddleware
 from keyboards import MENU_KB, MENU_TEXT
 from handlers.main import router as main_router
 from handlers.recording import router as recording_router, start_record as recording_start
@@ -19,6 +20,8 @@ from handlers.holiday_quest import router as holiday_router
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
+dp.message.middleware(UserLogMiddleware())
+dp.callback_query.middleware(UserLogMiddleware())
 
 
 async def safe_answer_callback(callback: CallbackQuery):
@@ -149,11 +152,6 @@ async def cmd_start(message: Message):
         first_name=user.first_name,
         last_name=user.last_name,
     )
-    try:
-        from sheets import append_subscription as sheet_sub
-        sheet_sub(user.id, user.username, user.first_name, user.last_name)
-    except Exception:
-        pass
     utm = {}
     if message.text and message.text.startswith("/start ") and len(message.text.split()) >= 2:
         args = message.text.split(maxsplit=1)[1]
