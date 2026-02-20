@@ -7,8 +7,8 @@ from database import get_story, get_scenarios, get_stories_by_scenario
 logger = logging.getLogger(__name__)
 router = Router()
 
-# Лимит подписи к фото в Telegram
 CAPTION_MAX_LENGTH = 1024
+MESSAGE_MAX_LENGTH = 4096
 
 
 async def show_scenarios_list(callback: types.CallbackQuery):
@@ -69,9 +69,8 @@ async def show_story_screen(bot, chat_id, message_id, story_id: int, edit: bool 
     # Текст без parse_mode — контент из БД может содержать _ * [ ] и ломать Markdown
     display_text = f"{title}\n\n{content}"
     caption_plain = display_text
-    # Лимит Telegram
-    if len(display_text) > 4096:
-        display_text = display_text[:4093] + "..."
+    if len(display_text) > MESSAGE_MAX_LENGTH:
+        display_text = display_text[:MESSAGE_MAX_LENGTH - 3] + "..."
     caption_for_photo = caption_plain[:CAPTION_MAX_LENGTH]
     
     # Кнопки навигации внутри сценария
@@ -82,7 +81,7 @@ async def show_story_screen(bot, chat_id, message_id, story_id: int, edit: bool 
         if story_index > 0:
             nav_buttons.append(InlineKeyboardButton(text="🔙 Назад", callback_data=f"story_nav_{scenario_id}_{story_index - 1}"))
         if story_index < total_stories - 1:
-            nav_buttons.append(InlineKeyboardButton(text="✨ Дальше", callback_data=f"story_nav_{scenario_id}_{story_index + 1}"))
+            nav_buttons.append(InlineKeyboardButton(text="➡️ Дальше", callback_data=f"story_nav_{scenario_id}_{story_index + 1}"))
     
     if nav_buttons:
         kb.append(nav_buttons)
