@@ -5,6 +5,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import OPERATOR_CHAT_ID
 from database import get_visible_games, add_lead, get_game, get_user_utm
+from utils import escape_md
 from handlers.stories import show_story_screen
 
 router = Router()
@@ -125,7 +126,7 @@ async def record_choose_game(callback: types.CallbackQuery, state: FSMContext):
     await callback.bot.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        text=f"Выбрано: **{g[1]}**\n{g[2]} {g[3] or ''}\n\nСколько человек будет?",
+        text=f"Выбрано: **{escape_md(g[1])}**\n{escape_md(g[2])} {escape_md(g[3] or '')}\n\nСколько человек будет?",
         reply_markup=kb,
         parse_mode="Markdown",
     )
@@ -194,7 +195,7 @@ async def record_back_from_story(callback: types.CallbackQuery, state: FSMContex
     await callback.bot.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        text=f"Выбрано: **{game_name}**\n\nСколько человек будет?",
+        text=f"Выбрано: **{escape_md(game_name)}**\n\nСколько человек будет?",
         reply_markup=kb,
         parse_mode="Markdown",
     )
@@ -247,7 +248,7 @@ async def record_back_contact(callback: types.CallbackQuery, state: FSMContext):
     await callback.bot.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        text=f"Выбрано: **{game_name}**\n\nСколько человек будет?",
+        text=f"Выбрано: **{escape_md(game_name)}**\n\nСколько человек будет?",
         reply_markup=_count_keyboard(),
         parse_mode="Markdown",
     )

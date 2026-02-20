@@ -3,6 +3,7 @@ from aiogram import Router, types, F
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
 from config import CHAT_LINK
 from database import get_story, get_scenarios, get_stories_by_scenario
+from utils import escape_md
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -69,9 +70,9 @@ async def show_story_screen(bot, chat_id, message_id, story_id: int, edit: bool 
     sid, title, content, image_url, game_id, order_num, hidden, scen_id = story[:8]
     image_url = (image_url or "").strip()
     
-    # Текст целиком в одном сообщении
-    display_text = f"**{title}**\n\n{content}"
-    caption_plain = f"{title}\n\n{content}"
+    # Текст целиком в одном сообщении (экранируем — в БД могут быть _ * и т.д.)
+    display_text = f"**{escape_md(title)}**\n\n{escape_md(content)}"
+    caption_plain = f"{escape_md(title)}\n\n{escape_md(content)}"
     # Лимит Telegram
     if len(display_text) > 4096:
         display_text = display_text[:4093] + "..."

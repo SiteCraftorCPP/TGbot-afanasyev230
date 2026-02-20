@@ -2,6 +2,7 @@ from aiogram import Router, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from database import get_visible_games
 from config import CHAT_LINK
+from utils import escape_md
 
 router = Router()
 
@@ -17,13 +18,13 @@ def get_schedule_content(with_back: bool = False):
         lines = []
         for g in games:
             gid, name, date, time, place, price, desc, limit = g
-            line = f"• **{name}** — {date}"
+            line = f"• **{escape_md(name)}** — {escape_md(date)}"
             if time:
-                line += f" {time}"
+                line += f" {escape_md(time)}"
             if place:
-                line += f"\n   📍 {place}"
+                line += f"\n   📍 {escape_md(place)}"
             if price:
-                line += f"\n   💰 {price}"
+                line += f"\n   💰 {escape_md(price)}"
             lines.append(line)
         text = "📆 **Ближайшие игры:**\n\n" + "\n\n".join(lines)
     kb = [

@@ -14,6 +14,7 @@ from aiogram.types import (
 )
 
 from config import ADMIN_IDS
+from utils import escape_md
 from database import (
     get_all_games,
     get_leads,
@@ -125,7 +126,7 @@ def _games_list_kb():
     for g in games:
         gid, name, date, time, place, price, desc, limit, hidden = g
         status = "❌" if hidden else "✅"
-        text += f"{status} {name} — {date}\n"
+        text += f"{status} {escape_md(name)} — {escape_md(date)}\n"
         kb.append([
             InlineKeyboardButton(text=f"{'✅ Показать' if hidden else '❌ Скрыть'}", callback_data=f"adm_toggle_{gid}"),
             InlineKeyboardButton(text="🗑 Удалить", callback_data=f"adm_delete_{gid}"),
@@ -142,7 +143,7 @@ def _schedule_edit_kb(games):
     for g in games:
         gid, name, date, time, place, price, desc, limit, hidden = g
         status = "❌" if hidden else "✅"
-        text += f"{status} {name} — {date}" + (f" {time}" if time else "") + "\n"
+        text += f"{status} {escape_md(name)} — {escape_md(date)}" + (f" {escape_md(time)}" if time else "") + "\n"
         kb.append([
             InlineKeyboardButton(text="✏️", callback_data=f"adm_edit_{gid}"),
             InlineKeyboardButton(text=f"{'✅' if hidden else '❌'}", callback_data=f"adm_toggle_s_{gid}"),
@@ -250,7 +251,7 @@ async def admin_edit_field_skip(callback: types.CallbackQuery, state: FSMContext
     row = get_game(gid)
     g = row
     _, name, date, time, place, price, desc, limit, hidden = g[:9]
-    text = f"**✏️ Редактировать:** {name}\n\n{date} {time or ''}\n📍 {place or '—'}\n💰 {price or '—'}\n\n{desc or '—'}\nЛимит: {limit}"
+    text = f"**✏️ Редактировать:** {escape_md(name)}\n\n{escape_md(date)} {escape_md(time or '')}\n📍 {escape_md(place or '—')}\n💰 {escape_md(price or '—')}\n\n{escape_md(desc or '—')}\nЛимит: {limit}"
     await callback.message.edit_text(text, reply_markup=_game_edit_kb(gid, g), parse_mode="Markdown")
     await callback.answer("Сохранено")
 
@@ -276,7 +277,7 @@ async def admin_edit_field_value(message: types.Message, state: FSMContext):
     row = get_game(gid)
     g = row
     _, name, date, time, place, price, desc, limit, hidden = g[:9]
-    text = f"**✏️ Редактировать:** {name}\n\n{date} {time or ''}\n📍 {place or '—'}\n💰 {price or '—'}\n\n{desc or '—'}\nЛимит: {limit}"
+    text = f"**✏️ Редактировать:** {escape_md(name)}\n\n{escape_md(date)} {escape_md(time or '')}\n📍 {escape_md(place or '—')}\n💰 {escape_md(price or '—')}\n\n{escape_md(desc or '—')}\nЛимит: {limit}"
     await message.answer(text, reply_markup=_game_edit_kb(gid, g), parse_mode="Markdown")
 
 
@@ -509,7 +510,7 @@ async def admin_leads_list(callback: types.CallbackQuery):
         for l in leads:
             lid, tg_id, uname, name, phone, gname, cnt, comment, status, created = l
             date_str = created[:10] if created else "—"
-            lines.append(f"#{lid} {name or '—'} | {gname} | {cnt} чел. | {date_str}")
+            lines.append(f"#{lid} {escape_md(name or '—')} | {escape_md(gname)} | {cnt} чел. | {date_str}")
         text = "**Лиды (последние 50):**\n_Лид = юзер прошёл запись и нажал «Подтвердить»_\n\n" + "\n".join(lines[:20])
         if len(lines) > 20:
             text += f"\n\n... и ещё {len(lines) - 20}"
@@ -676,7 +677,8 @@ async def _admin_broadcast_confirm(msg_target, state: FSMContext, callback=None)
             await msg_target.answer(err)
         return
 
-    preview = f"Текст: {text[:100]}..." if len(text) > 100 else f"Текст: {text or '(нет)'}"
+    preview_raw = (text[:100] + "...") if len(text) > 100 else (text or "(нет)")
+    preview = f"Текст: {escape_md(preview_raw)}"
     if media_id:
         preview += f"\nМедиа: {media_type}"
     preview += f"\n\nПолучателей: **{count}**"
@@ -726,14 +728,15 @@ async def admin_broadcast_send(callback: types.CallbackQuery, state: FSMContext)
 
     await callback.message.edit_text(f"📤 Отправка {len(user_ids)} пользователям...")
     sent, failed = 0, 0
+    safe_text = escape_md(text) if text else None
     for uid in user_ids:
         try:
             if media_id and media_type == "photo":
-                await callback.bot.send_photo(uid, photo=media_id, caption=text or None, parse_mode="Markdown" if text else None)
+                await callback.bot.send_photo(uid, photo=media_id, caption=safe_text, parse_mode="Markdown" if safe_text else None)
             elif media_id and media_type == "document":
-                await callback.bot.send_document(uid, document=media_id, caption=text or None, parse_mode="Markdown" if text else None)
+                await callback.bot.send_document(uid, document=media_id, caption=safe_text, parse_mode="Markdown" if safe_text else None)
             else:
-                await callback.bot.send_message(uid, text=text or "—", parse_mode="Markdown")
+                await callback.bot.send_message(uid, text=safe_text or "—", parse_mode="Markdown")
             sent += 1
         except Exception:
             failed += 1
@@ -772,7 +775,7 @@ def _scenarios_list_kb():
     kb = []
     for s in scenarios:
         sid, name, desc = s
-        text += f"🔹 {name}\n"
+        text += f"🔹 {escape_md(name)}\n"
         kb.append([
             InlineKeyboardButton(text=f"✏️ {name}", callback_data=f"adm_scen_edit_{sid}"),
             InlineKeyboardButton(text="📖 Сюжеты", callback_data=f"adm_scen_stories_{sid}"),
@@ -876,7 +879,7 @@ def _scenario_stories_kb(scenario_id):
         return "Сценарий не найден", None
         
     stories = get_stories_by_scenario(scenario_id)
-    text = f"**Сюжеты сценария «{scenario[1]}»:**\n\n"
+    text = f"**Сюжеты сценария «{escape_md(scenario[1])}»:**\n\n"
     kb = []
     
     if not stories:
@@ -886,7 +889,7 @@ def _scenario_stories_kb(scenario_id):
             sid, title, content, image_url, game_id, order_num, hidden, scen_id = s
             status = "❌" if hidden else "✅"
             preview = (title[:20] + "...") if len(title) > 20 else title
-            text += f"{status} {preview}\n"
+            text += f"{status} {escape_md(preview)}\n"
             
             # Ряд управления: Ред, Вверх, Вниз (обе кнопки всегда показываем)
             control_row = [
@@ -1144,7 +1147,7 @@ async def admin_format_edit(callback: types.CallbackQuery):
     text = "**Редактирование «Что это за формат?»**\n\n"
     if text_db:
         preview = (text_db[:100] + "...") if len(text_db) > 100 else text_db
-        text += f"Текущий текст:\n{preview}\n\n"
+        text += f"Текущий текст:\n{escape_md(preview)}\n\n"
     if image_url:
         text += "✅ Картинка прикреплена\n\n"
     else:
@@ -1186,7 +1189,7 @@ async def admin_format_edit_text_save(message: types.Message, state: FSMContext)
     text = "**Редактирование «Что это за формат?»**\n\n"
     if text_db:
         preview = (text_db[:100] + "...") if len(text_db) > 100 else text_db
-        text += f"Текущий текст:\n{preview}\n\n"
+        text += f"Текущий текст:\n{escape_md(preview)}\n\n"
     if image_url:
         text += "✅ Картинка прикреплена\n\n"
     else:
@@ -1226,7 +1229,7 @@ async def admin_format_delete_img(callback: types.CallbackQuery, state: FSMConte
     text = "**Редактирование «Что это за формат?»**\n\n"
     if text_db:
         preview = (text_db[:100] + "...") if len(text_db) > 100 else text_db
-        text += f"Текущий текст:\n{preview}\n\n"
+        text += f"Текущий текст:\n{escape_md(preview)}\n\n"
     text += "❌ Картинка не прикреплена\n\n"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -1263,7 +1266,7 @@ async def _admin_format_save_img(message: types.Message, state: FSMContext, file
     text = "**Редактирование «Что это за формат?»**\n\n"
     if text_db:
         preview = (text_db[:100] + "...") if len(text_db) > 100 else text_db
-        text += f"Текущий текст:\n{preview}\n\n"
+        text += f"Текущий текст:\n{escape_md(preview)}\n\n"
     text += "✅ Картинка прикреплена\n\n"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -1290,7 +1293,7 @@ async def admin_format_edit_img_text(message: types.Message, state: FSMContext):
     text = "**Редактирование «Что это за формат?»**\n\n"
     if text_db:
         preview = (text_db[:100] + "...") if len(text_db) > 100 else text_db
-        text += f"Текущий текст:\n{preview}\n\n"
+        text += f"Текущий текст:\n{escape_md(preview)}\n\n"
     text += "❌ Картинка не прикреплена\n\n"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[

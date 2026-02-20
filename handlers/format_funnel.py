@@ -4,6 +4,7 @@ from aiogram import Router, types, F
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
 from config import CHAT_LINK
 from database import get_format_info
+from utils import escape_md
 
 router = Router()
 
@@ -16,7 +17,7 @@ async def format_show_screen(target):
 
     if not text:
         text = "Сюжетная игра (ролевой квест) — это как фильм, только ты внутри истории.\n\nТебе дают роль и цель, дальше события разворачиваются через общение и решения. Ведущий всё ведёт и помогает."
-
+    text = escape_md(text)
     image_url = (image_url or "").strip()
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -29,7 +30,7 @@ async def format_show_screen(target):
     ])
 
     if image_url:
-        caption = text[:CAPTION_MAX_LENGTH]
+        caption = text[:CAPTION_MAX_LENGTH]  # text already escaped
         if hasattr(target, "bot") and hasattr(target, "message"):
             try:
                 await target.bot.edit_message_media(

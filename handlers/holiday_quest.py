@@ -6,6 +6,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import OPERATOR_CHAT_ID
 from database import add_holiday_order
+from utils import escape_md
 
 router = Router()
 
@@ -59,9 +60,9 @@ async def holiday_quest_phone(message: types.Message, state: FSMContext):
     add_holiday_order(tg_id=user.id, username=user.username, name=name, phone=phone)
     notify = (
         f"🎂 **Заявка: квест на праздник**\n\n"
-        f"Имя: {name}\n"
-        f"Телефон: {phone}\n"
-        f"От: @{user.username or '—'} | {user.full_name or '—'}"
+        f"Имя: {escape_md(name)}\n"
+        f"Телефон: {escape_md(phone)}\n"
+        f"От: @{escape_md(user.username or '—')} | {escape_md(user.full_name or '—')}"
     )
     try:
         await message.bot.send_message(OPERATOR_CHAT_ID, notify, parse_mode="Markdown")
