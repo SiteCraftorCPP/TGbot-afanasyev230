@@ -520,27 +520,43 @@ async def admin_leads_list(callback: types.CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data == "admin_followup")
-async def admin_followup(callback: types.CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS:
-        await callback.answer()
-        return
-    users_count = len(get_users_for_broadcast("all"))
-    kb = InlineKeyboardMarkup(
+def _followup_kb():
+    return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="📥 Выгрузить пользователей (CSV)", callback_data="admin_export_users")],
             [InlineKeyboardButton(text="📤 Рассылка", callback_data="admin_broadcast_start")],
             [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")],
         ]
     )
+
+
+async def _show_followup_screen(callback: types.CallbackQuery):
+    """Показать экран Follow-up (без answer — вызывающий должен ответить на callback)."""
+    users_count = len(get_users_for_broadcast("all"))
     text = (
         f"🔄 **Follow-up**\n\n"
         f"Пользователей в базе: **{users_count}**\n\n"
         f"• **Выгрузить** — таблица со всеми, кто хоть раз нажал кнопку в боте (tg_id, имя, активность, телефон).\n"
         f"• **Рассылка** — отправить сообщение с текстом и/или медиа всем или по фильтру."
     )
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
-    await callback.answer()
+    await callback.message.edit_text(text, reply_markup=_followup_kb(), parse_mode="Markdown")
+
+
+@router.callback_query(F.data == "admin_followup")
+async def admin_followup(callback: types.CallbackQuery):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    if callback.from_user.id not in ADMIN_IDS:
+        return
+    try:
+        await _show_followup_screen(callback)
+    except Exception as e:
+        try:
+            await callback.message.answer(f"Ошибка Follow-up: {str(e)[:200]}")
+        except Exception:
+            pass
 
 
 @router.callback_query(F.data == "admin_export_users")

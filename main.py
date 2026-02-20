@@ -88,6 +88,24 @@ async def cb_menu_schedule(callback: CallbackQuery):
             parse_mode="Markdown",
         )
 
+@dp.callback_query(F.data == "admin_followup")
+async def cb_admin_followup(callback: CallbackQuery):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    if callback.from_user.id not in ADMIN_IDS:
+        return
+    from handlers.admin import _show_followup_screen
+    try:
+        await _show_followup_screen(callback)
+    except Exception as e:
+        try:
+            await callback.message.answer(f"Ошибка: {str(e)[:200]}")
+        except Exception:
+            pass
+
+
 @dp.callback_query(F.data.startswith("adm_edit_"))
 async def cb_admin_edit_game(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:

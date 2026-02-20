@@ -476,52 +476,65 @@ def log_user_event(tg_id: int, username: str, first_name: str, last_name: str, e
 
 def get_users_for_export(limit=50000):
     """Агрегат по пользователям: tg_id, username, first_name, last_name, first_seen, last_seen, event_count, events_sample, phone."""
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT tg_id, username, first_name, last_name,
-               MIN(created_at) as first_seen, MAX(created_at) as last_seen,
-               COUNT(*) as event_count,
-               GROUP_CONCAT(DISTINCT event_type) as events
-        FROM user_events
-        GROUP BY tg_id
-        ORDER BY last_seen DESC
-        LIMIT ?
-    """, (limit,))
-    rows = cur.fetchall()
-    # Дополняем phone из leads и holiday_orders
-    cur.execute("SELECT tg_id, phone FROM leads WHERE phone != '' AND phone IS NOT NULL")
-    lead_phones = {r[0]: r[1] for r in cur.fetchall()}
-    cur.execute("SELECT tg_id, phone FROM holiday_orders WHERE phone != '' AND phone IS NOT NULL")
-    for r in cur.fetchall():
-        if r[0] not in lead_phones:
-            lead_phones[r[0]] = r[1]
-    conn.close()
-    result = []
-    for r in rows:
-        tg_id, uname, fname, lname, first_seen, last_seen, cnt, events = r
-        phone = lead_phones.get(tg_id, "")
-        result.append((tg_id, uname, fname, lname, first_seen, last_seen, cnt, (events or "")[:200], phone))
-    return result
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT tg_id, username, first_name, last_name,
+                   MIN(created_at) as first_seen, MAX(created_at) as last_seen,
+                   COUNT(*) as event_count,
+                   GROUP_CONCAT(DISTINCT event_type) as events
+            FROM user_events
+            GROUP BY tg_id
+            ORDER BY last_seen DESC
+            LIMIT ?
+        """, (limit,))
+        rows = cur.fetchall()
+        cur.execute("SELECT tg_id, phone FROM leads WHERE phone != '' AND phone IS NOT NULL")
+        lead_phones = {r[0]: r[1] for r in cur.fetchall()}
+        cur.execute("SELECT tg_id, phone FROM holiday_orders WHERE phone != '' AND phone IS NOT NULL")
+        for r in cur.fetchall():
+            if r[0] not in lead_phones:
+                lead_phones[r[0]] = r[1]
+        conn.close()
+        result = []
+        for r in rows:
+            tg_id, uname, fname, lname, first_seen, last_seen, cnt, events = r
+            phone = lead_phones.get(tg_id, "")
+            result.append((tg_id, uname, fname, lname, first_seen, last_seen, cnt, (events or "")[:200], phone))
+        return result
+    except sqlite3.OperationalError:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return []
 
 
 def get_users_for_broadcast(filter_type: str = "all"):
     """Список tg_id для рассылки. all | with_lead | without_lead."""
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT DISTINCT tg_id FROM user_events")
-    all_ids = {r[0] for r in cur.fetchall()}
-    if filter_type == "all":
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT DISTINCT tg_id FROM user_events")
+        all_ids = {r[0] for r in cur.fetchall()}
+        if filter_type == "all":
+            conn.close()
+            return list(all_ids)
+        cur.execute("SELECT DISTINCT tg_id FROM leads")
+        lead_ids = {r[0] for r in cur.fetchall()}
+        cur.execute("SELECT DISTINCT tg_id FROM holiday_orders")
+        lead_ids.update(r[0] for r in cur.fetchall())
         conn.close()
-        return list(all_ids)
-    cur.execute("SELECT DISTINCT tg_id FROM leads")
-    lead_ids = {r[0] for r in cur.fetchall()}
-    cur.execute("SELECT DISTINCT tg_id FROM holiday_orders")
-    lead_ids.update(r[0] for r in cur.fetchall())
-    conn.close()
-    if filter_type == "with_lead":
-        return list(all_ids & lead_ids)
-    return list(all_ids - lead_ids)
+        if filter_type == "with_lead":
+            return list(all_ids & lead_ids)
+        return list(all_ids - lead_ids)
+    except sqlite3.OperationalError:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return []
 
 
 def get_subscriptions(limit=10000):
