@@ -533,12 +533,7 @@ def _followup_kb():
 async def _show_followup_screen(callback: types.CallbackQuery):
     """Показать экран Follow-up (без answer — вызывающий должен ответить на callback)."""
     users_count = len(get_users_for_broadcast("all"))
-    text = (
-        f"🔄 Follow-up\n\n"
-        f"Пользователей в базе: {users_count}\n\n"
-        f"• Выгрузить — таблица со всеми, кто хоть раз нажал кнопку в боте (tg_id, имя, активность, телефон).\n"
-        f"• Рассылка — отправить сообщение с текстом и/или медиа всем или по фильтру."
-    )
+    text = f"🔄 Follow-up\n\nПользователей в базе: {users_count}"
     await callback.message.edit_text(text, reply_markup=_followup_kb())
 
 
