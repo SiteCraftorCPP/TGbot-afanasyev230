@@ -510,7 +510,7 @@ async def admin_leads_list(callback: types.CallbackQuery):
             lid, tg_id, uname, name, phone, gname, cnt, comment, status, created = l
             date_str = created[:10] if created else "—"
             lines.append(f"#{lid} {(name or '—')} | {gname} | {cnt} чел. | {date_str}")
-        text = "**Лиды (последние 50):**\n_Лид = юзер прошёл запись и нажал «Подтвердить»_\n\n" + "\n".join(lines[:20])
+        text = "Лиды (последние 50)\nЛид = юзер прошёл запись и нажал «Подтвердить»\n\n" + "\n".join(lines[:20])
         if len(lines) > 20:
             text += f"\n\n... и ещё {len(lines) - 20}"
     kb = InlineKeyboardMarkup(
@@ -582,7 +582,7 @@ async def admin_broadcast_start(callback: types.CallbackQuery, state: FSMContext
     await state.update_data(media_file_id=None)
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_broadcast_cancel")]])
     await callback.message.edit_text(
-        "📤 **Рассылка**\n\nВведите текст сообщения (можно Markdown). Или отправьте «-» чтобы только медиа:",
+        "📤 Рассылка\n\nВведите текст сообщения. Или отправьте «-» чтобы только медиа:",
         reply_markup=kb,
     )
     await callback.answer()
@@ -605,7 +605,7 @@ async def admin_broadcast_text(message: types.Message, state: FSMContext):
     await state.update_data(broadcast_text=text)
     await state.set_state(AdminBroadcastStates.get_media)
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⏭ Пропустить медиа", callback_data="admin_broadcast_skip_media")],
+        [InlineKeyboardButton(text="💫 Пропустить медиа", callback_data="admin_broadcast_skip_media")],
         [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_broadcast_cancel")],
     ])
     await message.answer("Отправьте фото или файл для прикрепления. Или нажмите «Пропустить»:", reply_markup=kb)
@@ -732,7 +732,11 @@ async def admin_broadcast_send(callback: types.CallbackQuery, state: FSMContext)
         except Exception:
             failed += 1
         await asyncio.sleep(0.05)
-    await callback.message.edit_text(f"✅ Рассылка завершена.\nОтправлено: {sent}, не доставлено: {failed}")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_followup")]])
+    await callback.message.edit_text(
+        f"✅ Рассылка завершена.\nОтправлено: {sent}, не доставлено: {failed}",
+        reply_markup=kb,
+    )
     await callback.answer()
 
 
