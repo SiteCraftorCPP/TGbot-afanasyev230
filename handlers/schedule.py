@@ -2,7 +2,6 @@ from aiogram import Router, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from database import get_visible_games
 from config import CHAT_LINK
-from utils import escape_md
 
 router = Router()
 
@@ -18,15 +17,15 @@ def get_schedule_content(with_back: bool = False):
         lines = []
         for g in games:
             gid, name, date, time, place, price, desc, limit = g
-            line = f"• **{escape_md(name)}** — {escape_md(date)}"
+            line = f"• {name} — {date}"
             if time:
-                line += f" {escape_md(time)}"
+                line += f" {time}"
             if place:
-                line += f"\n   📍 {escape_md(place)}"
+                line += f"\n   📍 {place}"
             if price:
-                line += f"\n   💰 {escape_md(price)}"
+                line += f"\n   💰 {price}"
             lines.append(line)
-        text = "📆 **Ближайшие игры:**\n\n" + "\n\n".join(lines)
+        text = "📆 Ближайшие игры:\n\n" + "\n\n".join(lines)
     kb = [
         [InlineKeyboardButton(text="🎯 Записаться", callback_data="menu_record")],
         [InlineKeyboardButton(text="💬 Вступить в чат", url=CHAT_LINK)],
@@ -38,7 +37,7 @@ def get_schedule_content(with_back: bool = False):
 
 async def show_schedule(message: types.Message, with_back: bool = False):
     text, kb = get_schedule_content(with_back)
-    await message.answer(text, reply_markup=kb, parse_mode="Markdown")
+    await message.answer(text, reply_markup=kb)
 
 
 @router.callback_query(lambda c: c.data == "schedule")

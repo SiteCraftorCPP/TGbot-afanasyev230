@@ -14,7 +14,6 @@ from aiogram.types import (
 )
 
 from config import ADMIN_IDS
-from utils import escape_md
 from database import (
     get_all_games,
     get_leads,
@@ -126,7 +125,7 @@ def _games_list_kb():
     for g in games:
         gid, name, date, time, place, price, desc, limit, hidden = g
         status = "❌" if hidden else "✅"
-        text += f"{status} {escape_md(name)} — {escape_md(date)}\n"
+        text += f"{status} {name} — {date}\n"
         kb.append([
             InlineKeyboardButton(text=f"{'✅ Показать' if hidden else '❌ Скрыть'}", callback_data=f"adm_toggle_{gid}"),
             InlineKeyboardButton(text="🗑 Удалить", callback_data=f"adm_delete_{gid}"),
@@ -143,7 +142,7 @@ def _schedule_edit_kb(games):
     for g in games:
         gid, name, date, time, place, price, desc, limit, hidden = g
         status = "❌" if hidden else "✅"
-        text += f"{status} {escape_md(name)} — {escape_md(date)}" + (f" {escape_md(time)}" if time else "") + "\n"
+        text += f"{status} {name} — {date}" + (f" {time}" if time else "") + "\n"
         kb.append([
             InlineKeyboardButton(text="✏️", callback_data=f"adm_edit_{gid}"),
             InlineKeyboardButton(text=f"{'✅' if hidden else '❌'}", callback_data=f"adm_toggle_s_{gid}"),
@@ -155,7 +154,7 @@ def _schedule_edit_kb(games):
 
 async def _refresh_games_list(message: types.Message):
     text, kb = _games_list_kb()
-    await message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    await message.edit_text(text, reply_markup=kb)
 
 
 @router.callback_query(F.data == "admin_games")
@@ -164,7 +163,7 @@ async def admin_games_list(callback: types.CallbackQuery):
         await callback.answer()
         return
     text, kb = _games_list_kb()
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
 
 
@@ -176,7 +175,7 @@ async def admin_schedule_list(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     games = get_all_games()
     text, kb = _schedule_edit_kb(games)
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
 
 
@@ -251,8 +250,8 @@ async def admin_edit_field_skip(callback: types.CallbackQuery, state: FSMContext
     row = get_game(gid)
     g = row
     _, name, date, time, place, price, desc, limit, hidden = g[:9]
-    text = f"**✏️ Редактировать:** {escape_md(name)}\n\n{escape_md(date)} {escape_md(time or '')}\n📍 {escape_md(place or '—')}\n💰 {escape_md(price or '—')}\n\n{escape_md(desc or '—')}\nЛимит: {limit}"
-    await callback.message.edit_text(text, reply_markup=_game_edit_kb(gid, g), parse_mode="Markdown")
+    text = f"✏️ Редактировать: {name}\n\n{date} {time or ''}\n📍 {place or '—'}\n💰 {price or '—'}\n\n{desc or '—'}\nЛимит: {limit}"
+    await callback.message.edit_text(text, reply_markup=_game_edit_kb(gid, g))
     await callback.answer("Сохранено")
 
 
@@ -277,14 +276,14 @@ async def admin_edit_field_value(message: types.Message, state: FSMContext):
     row = get_game(gid)
     g = row
     _, name, date, time, place, price, desc, limit, hidden = g[:9]
-    text = f"**✏️ Редактировать:** {escape_md(name)}\n\n{escape_md(date)} {escape_md(time or '')}\n📍 {escape_md(place or '—')}\n💰 {escape_md(price or '—')}\n\n{escape_md(desc or '—')}\nЛимит: {limit}"
-    await message.answer(text, reply_markup=_game_edit_kb(gid, g), parse_mode="Markdown")
+    text = f"✏️ Редактировать: {name}\n\n{date} {time or ''}\n📍 {place or '—'}\n💰 {price or '—'}\n\n{desc or '—'}\nЛимит: {limit}"
+    await message.answer(text, reply_markup=_game_edit_kb(gid, g))
 
 
 async def _refresh_schedule_list(message: types.Message):
     games = get_all_games()
     text, kb = _schedule_edit_kb(games)
-    await message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    await message.edit_text(text, reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("adm_delete_s_"))
@@ -510,14 +509,14 @@ async def admin_leads_list(callback: types.CallbackQuery):
         for l in leads:
             lid, tg_id, uname, name, phone, gname, cnt, comment, status, created = l
             date_str = created[:10] if created else "—"
-            lines.append(f"#{lid} {escape_md(name or '—')} | {escape_md(gname)} | {cnt} чел. | {date_str}")
+            lines.append(f"#{lid} {(name or '—')} | {gname} | {cnt} чел. | {date_str}")
         text = "**Лиды (последние 50):**\n_Лид = юзер прошёл запись и нажал «Подтвердить»_\n\n" + "\n".join(lines[:20])
         if len(lines) > 20:
             text += f"\n\n... и ещё {len(lines) - 20}"
     kb = InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]]
     )
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
 
 
@@ -535,12 +534,12 @@ async def _show_followup_screen(callback: types.CallbackQuery):
     """Показать экран Follow-up (без answer — вызывающий должен ответить на callback)."""
     users_count = len(get_users_for_broadcast("all"))
     text = (
-        f"🔄 **Follow-up**\n\n"
-        f"Пользователей в базе: **{users_count}**\n\n"
-        f"• **Выгрузить** — таблица со всеми, кто хоть раз нажал кнопку в боте (tg_id, имя, активность, телефон).\n"
-        f"• **Рассылка** — отправить сообщение с текстом и/или медиа всем или по фильтру."
+        f"🔄 Follow-up\n\n"
+        f"Пользователей в базе: {users_count}\n\n"
+        f"• Выгрузить — таблица со всеми, кто хоть раз нажал кнопку в боте (tg_id, имя, активность, телефон).\n"
+        f"• Рассылка — отправить сообщение с текстом и/или медиа всем или по фильтру."
     )
-    await callback.message.edit_text(text, reply_markup=_followup_kb(), parse_mode="Markdown")
+    await callback.message.edit_text(text, reply_markup=_followup_kb())
 
 
 @router.callback_query(F.data == "admin_followup")
@@ -590,7 +589,6 @@ async def admin_broadcast_start(callback: types.CallbackQuery, state: FSMContext
     await callback.message.edit_text(
         "📤 **Рассылка**\n\nВведите текст сообщения (можно Markdown). Или отправьте «-» чтобы только медиа:",
         reply_markup=kb,
-        parse_mode="Markdown",
     )
     await callback.answer()
 
@@ -678,10 +676,9 @@ async def _admin_broadcast_confirm(msg_target, state: FSMContext, callback=None)
         return
 
     preview_raw = (text[:100] + "...") if len(text) > 100 else (text or "(нет)")
-    preview = f"Текст: {escape_md(preview_raw)}"
+    preview = f"Текст: {preview_raw}\n\nПолучателей: {count}"
     if media_id:
-        preview += f"\nМедиа: {media_type}"
-    preview += f"\n\nПолучателей: **{count}**"
+        preview = f"Текст: {preview_raw}\nМедиа: {media_type}\n\nПолучателей: {count}"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -693,10 +690,10 @@ async def _admin_broadcast_confirm(msg_target, state: FSMContext, callback=None)
         [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_broadcast_cancel")],
     ])
     if callback:
-        await callback.message.edit_text(f"📤 **Подтверждение рассылки**\n\n{preview}", reply_markup=kb, parse_mode="Markdown")
+        await callback.message.edit_text(f"📤 Подтверждение рассылки\n\n{preview}", reply_markup=kb)
         await callback.answer()
     else:
-        await msg_target.answer(f"📤 **Подтверждение рассылки**\n\n{preview}", reply_markup=kb, parse_mode="Markdown")
+        await msg_target.answer(f"📤 Подтверждение рассылки\n\n{preview}", reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("admin_broadcast_filter_"))
@@ -728,15 +725,14 @@ async def admin_broadcast_send(callback: types.CallbackQuery, state: FSMContext)
 
     await callback.message.edit_text(f"📤 Отправка {len(user_ids)} пользователям...")
     sent, failed = 0, 0
-    safe_text = escape_md(text) if text else None
     for uid in user_ids:
         try:
             if media_id and media_type == "photo":
-                await callback.bot.send_photo(uid, photo=media_id, caption=safe_text, parse_mode="Markdown" if safe_text else None)
+                await callback.bot.send_photo(uid, photo=media_id, caption=text or None)
             elif media_id and media_type == "document":
-                await callback.bot.send_document(uid, document=media_id, caption=safe_text, parse_mode="Markdown" if safe_text else None)
+                await callback.bot.send_document(uid, document=media_id, caption=text or None)
             else:
-                await callback.bot.send_message(uid, text=safe_text or "—", parse_mode="Markdown")
+                await callback.bot.send_message(uid, text=text or "—")
             sent += 1
         except Exception:
             failed += 1
@@ -775,7 +771,7 @@ def _scenarios_list_kb():
     kb = []
     for s in scenarios:
         sid, name, desc = s
-        text += f"🔹 {escape_md(name)}\n"
+        text += f"🔹 {name}\n"
         kb.append([
             InlineKeyboardButton(text=f"✏️ {name}", callback_data=f"adm_scen_edit_{sid}"),
             InlineKeyboardButton(text="📖 Сюжеты", callback_data=f"adm_scen_stories_{sid}"),
@@ -790,7 +786,7 @@ def _scenarios_list_kb():
 @router.callback_query(F.data == "admin_scenarios")
 async def admin_scenarios_list(callback: types.CallbackQuery):
     text, kb = _scenarios_list_kb()
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
 
 
@@ -815,7 +811,7 @@ async def admin_add_scenario_name(message: types.Message, state: FSMContext):
     
     # Показываем список сценариев
     text, kb = _scenarios_list_kb()
-    await message.answer(text, reply_markup=kb, parse_mode="Markdown")
+    await message.answer(text, reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("adm_scen_del_"))
@@ -824,7 +820,7 @@ async def admin_delete_scenario(callback: types.CallbackQuery):
     delete_scenario(sid)
     await callback.answer("Сценарий удалён")
     text, kb = _scenarios_list_kb()
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    await callback.message.edit_text(text, reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("adm_scen_edit_"))
@@ -868,7 +864,7 @@ async def admin_edit_scenario_desc(message: types.Message, state: FSMContext):
     await message.answer("✅ Сценарий обновлён.")
     
     text, kb = _scenarios_list_kb()
-    await message.answer(text, reply_markup=kb, parse_mode="Markdown")
+    await message.answer(text, reply_markup=kb)
 
 
 # --- Stories Management (per scenario) ---
@@ -879,7 +875,7 @@ def _scenario_stories_kb(scenario_id):
         return "Сценарий не найден", None
         
     stories = get_stories_by_scenario(scenario_id)
-    text = f"**Сюжеты сценария «{escape_md(scenario[1])}»:**\n\n"
+    text = f"**Сюжеты сценария «{scenario[1]}»:**\n\n"
     kb = []
     
     if not stories:
@@ -889,7 +885,7 @@ def _scenario_stories_kb(scenario_id):
             sid, title, content, image_url, game_id, order_num, hidden, scen_id = s
             status = "❌" if hidden else "✅"
             preview = (title[:20] + "...") if len(title) > 20 else title
-            text += f"{status} {escape_md(preview)}\n"
+            text += f"{status} {preview}\n"
             
             # Ряд управления: Ред, Вверх, Вниз (обе кнопки всегда показываем)
             control_row = [
@@ -917,7 +913,7 @@ async def admin_scenario_stories(callback: types.CallbackQuery):
     if not kb:
         await callback.answer(text)
         return
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
 
 
@@ -932,7 +928,7 @@ async def admin_toggle_story(callback: types.CallbackQuery):
     await callback.answer(f"Сюжет {status}")
     
     text, kb = _scenario_stories_kb(scenario_id)
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    await callback.message.edit_text(text, reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("adm_story_move_"))
@@ -946,7 +942,7 @@ async def admin_move_story(callback: types.CallbackQuery):
     await callback.answer()
     
     text, kb = _scenario_stories_kb(scenario_id)
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    await callback.message.edit_text(text, reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("adm_story_delete_"))
@@ -959,7 +955,7 @@ async def admin_delete_story(callback: types.CallbackQuery):
     await callback.answer("Сюжет удалён")
     
     text, kb = _scenario_stories_kb(scenario_id)
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    await callback.message.edit_text(text, reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("adm_story_edit_"))
@@ -1005,7 +1001,7 @@ async def admin_edit_story_text_save(message: types.Message, state: FSMContext):
     await message.answer("✅ Текст обновлён.")
     
     text, kb = _scenario_stories_kb(scenario_id)
-    await message.answer(text, reply_markup=kb, parse_mode="Markdown")
+    await message.answer(text, reply_markup=kb)
 
 
 @router.callback_query(F.data == "adm_st_ed_img")
@@ -1042,7 +1038,7 @@ async def _save_story_img(message: types.Message, state: FSMContext, image_url: 
     await message.answer("✅ Изображение обновлено.")
     
     text, kb = _scenario_stories_kb(scenario_id)
-    await message.answer(text, reply_markup=kb, parse_mode="Markdown")
+    await message.answer(text, reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("adm_add_story_"))
@@ -1135,7 +1131,7 @@ async def _finish_add_story(message: types.Message, state: FSMContext):
     
     # Возвращаем меню сюжетов сценария
     text, kb = _scenario_stories_kb(scenario_id)
-    await message.answer(text, reply_markup=kb, parse_mode="Markdown")
+    await message.answer(text, reply_markup=kb)
 
 
 # --- Format Management (один экран "Что это за формат?") ---
@@ -1147,7 +1143,7 @@ async def admin_format_edit(callback: types.CallbackQuery):
     text = "**Редактирование «Что это за формат?»**\n\n"
     if text_db:
         preview = (text_db[:100] + "...") if len(text_db) > 100 else text_db
-        text += f"Текущий текст:\n{escape_md(preview)}\n\n"
+        text += f"Текущий текст:\n{preview}\n\n"
     if image_url:
         text += "✅ Картинка прикреплена\n\n"
     else:
@@ -1159,7 +1155,7 @@ async def admin_format_edit(callback: types.CallbackQuery):
         [InlineKeyboardButton(text="👁 Предпросмотр", callback_data="adm_fmt_preview")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")],
     ])
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
 
 
@@ -1189,7 +1185,7 @@ async def admin_format_edit_text_save(message: types.Message, state: FSMContext)
     text = "**Редактирование «Что это за формат?»**\n\n"
     if text_db:
         preview = (text_db[:100] + "...") if len(text_db) > 100 else text_db
-        text += f"Текущий текст:\n{escape_md(preview)}\n\n"
+        text += f"Текущий текст:\n{preview}\n\n"
     if image_url:
         text += "✅ Картинка прикреплена\n\n"
     else:
@@ -1201,7 +1197,7 @@ async def admin_format_edit_text_save(message: types.Message, state: FSMContext)
         [InlineKeyboardButton(text="👁 Предпросмотр", callback_data="adm_fmt_preview")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")],
     ])
-    await message.answer(text, reply_markup=kb, parse_mode="Markdown")
+    await message.answer(text, reply_markup=kb)
 
 
 @router.callback_query(F.data == "adm_fmt_edit_img")
@@ -1229,7 +1225,7 @@ async def admin_format_delete_img(callback: types.CallbackQuery, state: FSMConte
     text = "**Редактирование «Что это за формат?»**\n\n"
     if text_db:
         preview = (text_db[:100] + "...") if len(text_db) > 100 else text_db
-        text += f"Текущий текст:\n{escape_md(preview)}\n\n"
+        text += f"Текущий текст:\n{preview}\n\n"
     text += "❌ Картинка не прикреплена\n\n"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -1238,7 +1234,7 @@ async def admin_format_delete_img(callback: types.CallbackQuery, state: FSMConte
         [InlineKeyboardButton(text="👁 Предпросмотр", callback_data="adm_fmt_preview")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")],
     ])
-    await callback.message.answer(text, reply_markup=kb, parse_mode="Markdown")
+    await callback.message.answer(text, reply_markup=kb)
 
 
 @router.message(AdminFormatStates.edit_image, F.photo)
@@ -1266,7 +1262,7 @@ async def _admin_format_save_img(message: types.Message, state: FSMContext, file
     text = "**Редактирование «Что это за формат?»**\n\n"
     if text_db:
         preview = (text_db[:100] + "...") if len(text_db) > 100 else text_db
-        text += f"Текущий текст:\n{escape_md(preview)}\n\n"
+        text += f"Текущий текст:\n{preview}\n\n"
     text += "✅ Картинка прикреплена\n\n"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -1275,7 +1271,7 @@ async def _admin_format_save_img(message: types.Message, state: FSMContext, file
         [InlineKeyboardButton(text="👁 Предпросмотр", callback_data="adm_fmt_preview")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")],
     ])
-    await message.answer(text, reply_markup=kb, parse_mode="Markdown")
+    await message.answer(text, reply_markup=kb)
 
 
 @router.message(AdminFormatStates.edit_image, F.text)
@@ -1293,7 +1289,7 @@ async def admin_format_edit_img_text(message: types.Message, state: FSMContext):
     text = "**Редактирование «Что это за формат?»**\n\n"
     if text_db:
         preview = (text_db[:100] + "...") if len(text_db) > 100 else text_db
-        text += f"Текущий текст:\n{escape_md(preview)}\n\n"
+        text += f"Текущий текст:\n{preview}\n\n"
     text += "❌ Картинка не прикреплена\n\n"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -1302,7 +1298,7 @@ async def admin_format_edit_img_text(message: types.Message, state: FSMContext):
         [InlineKeyboardButton(text="👁 Предпросмотр", callback_data="adm_fmt_preview")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")],
     ])
-    await message.answer(text, reply_markup=kb, parse_mode="Markdown")
+    await message.answer(text, reply_markup=kb)
 
 
 @router.callback_query(F.data == "adm_fmt_preview")

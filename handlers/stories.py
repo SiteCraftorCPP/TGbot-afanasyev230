@@ -3,7 +3,6 @@ from aiogram import Router, types, F
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
 from config import CHAT_LINK
 from database import get_story, get_scenarios, get_stories_by_scenario
-from utils import escape_md
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -34,10 +33,8 @@ async def show_scenarios_list(callback: types.CallbackQuery):
             message_id=callback.message.message_id,
             text=text,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=kb),
-            parse_mode="Markdown",
         )
     except Exception:
-        # Если было фото, удаляем и шлем новое
         try:
             await callback.bot.delete_message(
                 chat_id=callback.message.chat.id,
@@ -49,7 +46,6 @@ async def show_scenarios_list(callback: types.CallbackQuery):
             chat_id=callback.message.chat.id,
             text=text,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=kb),
-            parse_mode="Markdown",
         )
 
 
@@ -70,9 +66,9 @@ async def show_story_screen(bot, chat_id, message_id, story_id: int, edit: bool 
     sid, title, content, image_url, game_id, order_num, hidden, scen_id = story[:8]
     image_url = (image_url or "").strip()
     
-    # Текст целиком в одном сообщении (экранируем — в БД могут быть _ * и т.д.)
-    display_text = f"**{escape_md(title)}**\n\n{escape_md(content)}"
-    caption_plain = f"{escape_md(title)}\n\n{escape_md(content)}"
+    # Текст без parse_mode — контент из БД может содержать _ * [ ] и ломать Markdown
+    display_text = f"{title}\n\n{content}"
+    caption_plain = display_text
     # Лимит Telegram
     if len(display_text) > 4096:
         display_text = display_text[:4093] + "..."
@@ -139,7 +135,6 @@ async def show_story_screen(bot, chat_id, message_id, story_id: int, edit: bool 
                 )
         except Exception as e:
             logger.warning("Story photo send failed story_id=%s image_url=%s: %s", story_id, (image_url[:30] if image_url else ""), e)
-            # Если не удалось отправить фото, отправляем текст
             if edit:
                 try:
                     await bot.edit_message_text(
@@ -147,10 +142,8 @@ async def show_story_screen(bot, chat_id, message_id, story_id: int, edit: bool 
                         message_id=message_id,
                         text=display_text,
                         reply_markup=reply_markup,
-                        parse_mode="Markdown",
                     )
                 except Exception:
-                    # Если не получилось отредактировать, удаляем и отправляем заново
                     try:
                         await bot.delete_message(chat_id=chat_id, message_id=message_id)
                     except Exception:
@@ -159,14 +152,12 @@ async def show_story_screen(bot, chat_id, message_id, story_id: int, edit: bool 
                         chat_id=chat_id,
                         text=display_text,
                         reply_markup=reply_markup,
-                        parse_mode="Markdown",
                     )
             else:
                 await bot.send_message(
                     chat_id=chat_id,
                     text=display_text,
                     reply_markup=reply_markup,
-                    parse_mode="Markdown",
                 )
     else:
         if edit:
@@ -176,10 +167,8 @@ async def show_story_screen(bot, chat_id, message_id, story_id: int, edit: bool 
                     message_id=message_id,
                     text=display_text,
                     reply_markup=reply_markup,
-                    parse_mode="Markdown",
                 )
             except Exception:
-                # Если было фото, а теперь текст - удаляем и отправляем заново
                 try:
                     await bot.delete_message(chat_id=chat_id, message_id=message_id)
                 except Exception:
@@ -188,14 +177,12 @@ async def show_story_screen(bot, chat_id, message_id, story_id: int, edit: bool 
                     chat_id=chat_id,
                     text=display_text,
                     reply_markup=reply_markup,
-                    parse_mode="Markdown",
                 )
         else:
             await bot.send_message(
                 chat_id=chat_id,
                 text=display_text,
                 reply_markup=reply_markup,
-                parse_mode="Markdown",
             )
     
     return True

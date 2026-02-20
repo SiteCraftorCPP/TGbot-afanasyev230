@@ -6,7 +6,6 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import OPERATOR_CHAT_ID
 from database import add_holiday_order
-from utils import escape_md
 
 router = Router()
 
@@ -27,9 +26,8 @@ async def holiday_quest_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.set_state(HolidayOrderStates.get_name)
     await callback.message.answer(
-        "🎂 **Заказ квеста на праздник**\n\nУкажите ваше имя:",
+        "🎂 Заказ квеста на праздник\n\nУкажите ваше имя:",
         reply_markup=_back_kb(),
-        parse_mode="Markdown",
     )
 
 
@@ -59,13 +57,13 @@ async def holiday_quest_phone(message: types.Message, state: FSMContext):
     user = message.from_user
     add_holiday_order(tg_id=user.id, username=user.username, name=name, phone=phone)
     notify = (
-        f"🎂 **Заявка: квест на праздник**\n\n"
-        f"Имя: {escape_md(name)}\n"
-        f"Телефон: {escape_md(phone)}\n"
-        f"От: @{escape_md(user.username or '—')} | {escape_md(user.full_name or '—')}"
+        f"🎂 Заявка: квест на праздник\n\n"
+        f"Имя: {name}\n"
+        f"Телефон: {phone}\n"
+        f"От: @{user.username or '—'} | {user.full_name or '—'}"
     )
     try:
-        await message.bot.send_message(OPERATOR_CHAT_ID, notify, parse_mode="Markdown")
+        await message.bot.send_message(OPERATOR_CHAT_ID, notify)
     except Exception:
         pass
     await message.answer(

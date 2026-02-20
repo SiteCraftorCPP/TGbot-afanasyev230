@@ -4,7 +4,6 @@ from aiogram import Router, types, F
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
 from config import CHAT_LINK
 from database import get_format_info
-from utils import escape_md
 
 router = Router()
 
@@ -17,7 +16,6 @@ async def format_show_screen(target):
 
     if not text:
         text = "Сюжетная игра (ролевой квест) — это как фильм, только ты внутри истории.\n\nТебе дают роль и цель, дальше события разворачиваются через общение и решения. Ведущий всё ведёт и помогает."
-    text = escape_md(text)
     image_url = (image_url or "").strip()
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -36,7 +34,7 @@ async def format_show_screen(target):
                 await target.bot.edit_message_media(
                     chat_id=target.message.chat.id,
                     message_id=target.message.message_id,
-                    media=InputMediaPhoto(media=image_url, caption=caption, parse_mode="Markdown"),
+                    media=InputMediaPhoto(media=image_url, caption=caption),
                     reply_markup=kb,
                 )
             except Exception:
@@ -52,10 +50,9 @@ async def format_show_screen(target):
                     photo=image_url,
                     caption=caption,
                     reply_markup=kb,
-                    parse_mode="Markdown",
                 )
         else:
-            await target.answer_photo(photo=image_url, caption=caption, reply_markup=kb, parse_mode="Markdown")
+            await target.answer_photo(photo=image_url, caption=caption, reply_markup=kb)
     else:
         if hasattr(target, "bot") and hasattr(target, "message"):
             try:
@@ -64,7 +61,6 @@ async def format_show_screen(target):
                     message_id=target.message.message_id,
                     text=text,
                     reply_markup=kb,
-                    parse_mode="Markdown",
                 )
             except Exception:
                 try:
@@ -78,7 +74,6 @@ async def format_show_screen(target):
                     chat_id=target.message.chat.id,
                     text=text,
                     reply_markup=kb,
-                    parse_mode="Markdown",
                 )
         else:
-            await target.answer(text, reply_markup=kb, parse_mode="Markdown")
+            await target.answer(text, reply_markup=kb)

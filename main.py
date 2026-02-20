@@ -69,11 +69,8 @@ async def cb_menu_schedule(callback: CallbackQuery):
             message_id=callback.message.message_id,
             text=text,
             reply_markup=kb,
-            parse_mode="Markdown",
         )
     except Exception:
-        # Если текущее сообщение — фото/медиа (например, из "Сюжеты"), редактирование текста упадёт.
-        # Тогда удаляем и отправляем расписание новым сообщением.
         try:
             await callback.bot.delete_message(
                 chat_id=callback.message.chat.id,
@@ -85,7 +82,6 @@ async def cb_menu_schedule(callback: CallbackQuery):
             chat_id=callback.message.chat.id,
             text=text,
             reply_markup=kb,
-            parse_mode="Markdown",
         )
 
 @dp.callback_query(F.data == "admin_followup")
