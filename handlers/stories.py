@@ -1,6 +1,6 @@
 import logging
 from aiogram import Router, types, F
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import CHAT_LINK
 from database import get_story, get_scenarios, get_stories_by_scenario
 
@@ -98,92 +98,35 @@ async def show_story_screen(bot, chat_id, message_id, story_id: int, edit: bool 
     ])
     
     reply_markup = InlineKeyboardMarkup(inline_keyboard=kb)
-    
-    # Отправка с изображением или без (подпись без Markdown — иначе API падает и фото не уходит)
-    # Важно: если у сюжета есть фото — держим его на всех экранах, иначе при "Дальше"
-    # фото-сообщение пытались заменить на текст и получались дубли/пропажа фото.
+
+    if edit:
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=message_id)
+        except Exception:
+            pass
+
     if image_url:
         try:
-            if edit:
-                try:
-                    await bot.edit_message_media(
-                        chat_id=chat_id,
-                        message_id=message_id,
-                        media=InputMediaPhoto(media=image_url, caption=caption_for_photo),
-                        reply_markup=reply_markup,
-                    )
-                except Exception as e1:
-                    logger.debug("edit_message_media failed: %s", e1)
-                    try:
-                        await bot.delete_message(chat_id=chat_id, message_id=message_id)
-                    except Exception:
-                        pass
-                    await bot.send_photo(
-                        chat_id=chat_id,
-                        photo=image_url,
-                        caption=caption_for_photo,
-                        reply_markup=reply_markup,
-                    )
-                    return True
-            else:
-                await bot.send_photo(
-                    chat_id=chat_id,
-                    photo=image_url,
-                    caption=caption_for_photo,
-                    reply_markup=reply_markup,
-                )
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=image_url,
+                caption=caption_for_photo,
+                reply_markup=reply_markup,
+            )
         except Exception as e:
-            logger.warning("Story photo send failed story_id=%s image_url=%s: %s", story_id, (image_url[:30] if image_url else ""), e)
-            if edit:
-                try:
-                    await bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=message_id,
-                        text=display_text,
-                        reply_markup=reply_markup,
-                    )
-                except Exception:
-                    try:
-                        await bot.delete_message(chat_id=chat_id, message_id=message_id)
-                    except Exception:
-                        pass
-                    await bot.send_message(
-                        chat_id=chat_id,
-                        text=display_text,
-                        reply_markup=reply_markup,
-                    )
-            else:
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=display_text,
-                    reply_markup=reply_markup,
-                )
-    else:
-        if edit:
-            try:
-                await bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    text=display_text,
-                    reply_markup=reply_markup,
-                )
-            except Exception:
-                try:
-                    await bot.delete_message(chat_id=chat_id, message_id=message_id)
-                except Exception:
-                    pass
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=display_text,
-                    reply_markup=reply_markup,
-                )
-        else:
+            logger.warning("Story photo send failed story_id=%s: %s", story_id, e)
             await bot.send_message(
                 chat_id=chat_id,
                 text=display_text,
                 reply_markup=reply_markup,
             )
-    
+    else:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=display_text,
+            reply_markup=reply_markup,
+        )
+
     return True
 
 

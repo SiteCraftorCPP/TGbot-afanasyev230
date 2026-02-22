@@ -1137,7 +1137,7 @@ async def _finish_add_story(message: types.Message, state: FSMContext):
 
 @router.callback_query(F.data == "admin_format")
 async def admin_format_edit(callback: types.CallbackQuery):
-    text_db, image_url = get_format_info()
+    text_db, image_url, _ = get_format_info()
     
     text = "Редактирование «Что это за формат?»\n\n"
     if text_db:
@@ -1161,7 +1161,7 @@ async def admin_format_edit(callback: types.CallbackQuery):
 @router.callback_query(F.data == "adm_fmt_edit_text")
 async def admin_format_edit_text_start(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(AdminFormatStates.edit_text)
-    text_db, _ = get_format_info()
+    text_db, _, _ = get_format_info()
     current = text_db or "Сюжетная игра (ролевой квест) — это как фильм, только ты внутри истории.\n\nТебе дают роль и цель, дальше события разворачиваются через общение и решения. Ведущий всё ведёт и помогает."
     await callback.message.answer(
         f"Редактирование текста «Что это за формат?».\n\n"
@@ -1174,13 +1174,13 @@ async def admin_format_edit_text_start(callback: types.CallbackQuery, state: FSM
 @router.message(AdminFormatStates.edit_text, F.text)
 async def admin_format_edit_text_save(message: types.Message, state: FSMContext):
     new_text = message.text.strip()
-    _, current_img = get_format_info()  # Сохраняем текущую картинку
+    _, current_img, _ = get_format_info()  # Сохраняем текущую картинку
     update_format_info(new_text, current_img or "")
     await state.clear()
     await message.answer("✅ Текст обновлён.")
     
     # Возвращаем меню редактирования
-    text_db, image_url = get_format_info()
+    text_db, image_url, _ = get_format_info()
     text = "Редактирование «Что это за формат?»\n\n"
     if text_db:
         preview = (text_db[:100] + "...") if len(text_db) > 100 else text_db
@@ -1220,7 +1220,7 @@ async def admin_format_delete_img(callback: types.CallbackQuery, state: FSMConte
     await callback.answer()
     
     # Возвращаем меню
-    text_db, image_url = get_format_info()
+    text_db, image_url, _ = get_format_info()
     text = "Редактирование «Что это за формат?»\n\n"
     if text_db:
         preview = (text_db[:100] + "...") if len(text_db) > 100 else text_db
@@ -1257,7 +1257,7 @@ async def _admin_format_save_img(message: types.Message, state: FSMContext, file
     await message.answer("✅ Картинка обновлена.")
     
     # Возвращаем меню
-    text_db, image_url = get_format_info()
+    text_db, image_url, _ = get_format_info()
     text = "Редактирование «Что это за формат?»\n\n"
     if text_db:
         preview = (text_db[:100] + "...") if len(text_db) > 100 else text_db
@@ -1284,7 +1284,7 @@ async def admin_format_edit_img_text(message: types.Message, state: FSMContext):
         return
     
     # Возвращаем меню
-    text_db, image_url = get_format_info()
+    text_db, image_url, _ = get_format_info()
     text = "Редактирование «Что это за формат?»\n\n"
     if text_db:
         preview = (text_db[:100] + "...") if len(text_db) > 100 else text_db

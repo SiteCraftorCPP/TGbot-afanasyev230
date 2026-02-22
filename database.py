@@ -160,12 +160,19 @@ def create_tables():
     CREATE TABLE IF NOT EXISTS format_info (
         id INTEGER PRIMARY KEY DEFAULT 1,
         text TEXT NOT NULL,
-        image_url TEXT
+        image_url TEXT,
+        video_url TEXT
     )
     """)
-    
-    # Создаём запись по умолчанию, если её нет
+    try:
+        cur.execute("ALTER TABLE format_info ADD COLUMN video_url TEXT")
+    except sqlite3.OperationalError:
+        pass
     cur.execute("INSERT OR IGNORE INTO format_info (id, text) VALUES (1, 'Сюжетная игра (ролевой квест) — это как фильм, только ты внутри истории.\n\nТебе дают роль и цель, дальше события разворачиваются через общение и решения. Ведущий всё ведёт и помогает.')")
+    cur.execute(
+        "UPDATE format_info SET video_url = ? WHERE id = 1 AND (video_url IS NULL OR video_url = '')",
+        ("https://www.youtube.com/watch?v=x3Ir917gDiM&list=PLDqVqfBsY9O-fPcm-pK-TpYWfnuJWSBFI",)
+    )
 
     # Исправляем существующие сюжеты: если hidden NULL (старые записи), делаем видимым
     cur.execute("UPDATE stories SET hidden = 0 WHERE hidden IS NULL")
@@ -744,33 +751,43 @@ def update_format_screen(sid, title, text, video_url=None):
 # --- Format Info (один экран "Что это за формат?") ---
 
 def get_format_info():
-    """Получить информацию о формате (один экран)."""
+    """Получить информацию о формате (один экран). Возвращает (text, image_url, video_url)."""
     conn = get_conn()
     cur = conn.cursor()
     try:
-        cur.execute("SELECT text, image_url FROM format_info WHERE id = 1")
+        cur.execute("SELECT text, image_url, video_url FROM format_info WHERE id = 1")
         row = cur.fetchone()
     except sqlite3.OperationalError:
+        try:
+            cur.execute("SELECT text, image_url FROM format_info WHERE id = 1")
+            row = cur.fetchone()
+            if row:
+                row = (row[0], row[1], None)
+        except Exception:
+            row = None
         conn.close()
-        return None, None
+        if row:
+            return row[0], row[1], row[2] if len(row) > 2 else None
+        return None, None, None
     conn.close()
     if row:
-        return row[0], row[1]
-    return None, None
+        return row[0], row[1], (row[2] if len(row) > 2 else None)
+    return None, None, None
 
 
-def update_format_info(text=None, image_url=None):
-    """Обновить информацию о формате. Можно обновлять только text или только image_url."""
+def update_format_info(text=None, image_url=None, video_url=None):
     conn = get_conn()
     cur = conn.cursor()
-    
-    if text is not None and image_url is not None:
+    if text is not None and image_url is not None and video_url is not None:
+        cur.execute("UPDATE format_info SET text = ?, image_url = ?, video_url = ? WHERE id = 1", (text, image_url, video_url))
+    elif text is not None and image_url is not None:
         cur.execute("UPDATE format_info SET text = ?, image_url = ? WHERE id = 1", (text, image_url))
     elif text is not None:
         cur.execute("UPDATE format_info SET text = ? WHERE id = 1", (text,))
     elif image_url is not None:
         cur.execute("UPDATE format_info SET image_url = ? WHERE id = 1", (image_url,))
-    
+    elif video_url is not None:
+        cur.execute("UPDATE format_info SET video_url = ? WHERE id = 1", (video_url,))
     conn.commit()
     conn.close()
 
