@@ -11,9 +11,11 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     KeyboardButton,
     BufferedInputFile,
+    InputMediaPhoto,
 )
 
 from config import ADMIN_IDS
+from utils import broadcast_text_to_html
 from database import (
     get_all_games,
     get_leads,
@@ -87,6 +89,7 @@ class AdminFormatStates(StatesGroup):
 class AdminBroadcastStates(StatesGroup):
     get_text = State()
     get_media = State()
+    button_text = State()
     confirm = State()
 
 
@@ -579,8 +582,16 @@ async def admin_broadcast_start(callback: types.CallbackQuery, state: FSMContext
         await callback.answer()
         return
     await state.set_state(AdminBroadcastStates.get_text)
-    await state.update_data(media_file_id=None)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_broadcast_cancel")]])
+    await state.update_data(
+        media_items=[],
+        media_kind=None,
+        broadcast_filter="all",
+        add_cta=False,
+        media_prompt_shown=False,
+    )
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_broadcast_cancel")]]
+    )
     await callback.message.edit_text(
         "📤 Рассылка\n\nВведите текст сообщения. Или отправьте «-» чтобы только медиа:",
         reply_markup=kb,
@@ -604,22 +615,30 @@ async def admin_broadcast_text(message: types.Message, state: FSMContext):
     text = "" if (message.text or "").strip() == "-" else (message.text or "").strip()
     await state.update_data(broadcast_text=text)
     await state.set_state(AdminBroadcastStates.get_media)
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💫 Пропустить медиа", callback_data="admin_broadcast_skip_media")],
-        [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_broadcast_cancel")],
-    ])
-    await message.answer("Отправьте фото или файл для прикрепления. Или нажмите «Пропустить»:", reply_markup=kb)
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💫 Пропустить медиа", callback_data="admin_broadcast_skip_media")],
+            [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_broadcast_cancel")],
+        ]
+    )
+    await message.answer(
+        "Отправьте одно или несколько для рассылки (до 10 фото в один пост)",
+        reply_markup=kb,
+    )
 
 
 @router.message(AdminBroadcastStates.get_text, F.photo)
 async def admin_broadcast_text_photo(message: types.Message, state: FSMContext):
-    """Фото с подписью — сразу текст и медиа."""
+    """Фото с подписью — сразу текст и первое медиа, дальше можно добавить ещё."""
     if message.from_user.id not in ADMIN_IDS:
         return
     text = (message.caption or "").strip() if message.caption else ""
-    await state.update_data(broadcast_text=text, media_file_id=message.photo[-1].file_id, media_type="photo")
-    await state.set_state(AdminBroadcastStates.confirm)
-    await _admin_broadcast_confirm(message, state)
+    first_photo_id = message.photo[-1].file_id
+    # Сохраняем текст и переводим в состояние добавления медиа
+    await state.update_data(broadcast_text=text)
+    await state.set_state(AdminBroadcastStates.get_media)
+    # Общая логика добавления фото и перехода к следующему шагу
+    await _broadcast_add_photo_and_maybe_next(message, state, first_photo_id)
 
 
 @router.message(AdminBroadcastStates.get_media, F.photo)
@@ -627,9 +646,72 @@ async def admin_broadcast_media_photo(message: types.Message, state: FSMContext)
     if message.from_user.id not in ADMIN_IDS:
         return
     file_id = message.photo[-1].file_id
-    await state.update_data(media_file_id=file_id, media_type="photo")
-    await state.set_state(AdminBroadcastStates.confirm)
-    await _admin_broadcast_confirm(message, state)
+    await _broadcast_add_photo_and_maybe_next(message, state, file_id)
+
+
+async def _broadcast_add_photo_and_maybe_next(message: types.Message, state: FSMContext, file_id: str):
+    """Общая логика добавления фото в рассылку.
+
+    - Собираем до 10 фото (альбом).
+    - Если это одиночное фото (нет media_group_id) — сразу переходим к шагу настройки кнопки.
+    - Если это альбом (есть media_group_id) — ждём ~0.8 сек, чтобы догрузились все фото с тем же media_group_id,
+      потом переходим к шагу настройки кнопки один раз.
+    """
+    data = await state.get_data()
+    media_items = data.get("media_items") or []
+    media_kind = data.get("media_kind")
+
+    if media_kind not in (None, "photo"):
+        await message.answer("Уже добавлен файл. В одной рассылке либо фото (альбом), либо один файл.")
+        return
+    if len(media_items) >= 10:
+        await message.answer("Уже добавлено 10 фото. Это максимум для одного поста.")
+        return
+
+    media_items.append({"type": "photo", "file_id": file_id})
+    await state.update_data(media_items=media_items, media_kind="photo")
+
+    group_id = message.media_group_id
+    # Одиночное фото — сразу следующий шаг
+    if not group_id:
+        await _broadcast_goto_button_step(message, state)
+        return
+
+    # Альбом: запоминаем media_group_id и стартуем отложенный переход.
+    last_group_id = data.get("last_media_group_id")
+    await state.update_data(last_media_group_id=group_id)
+    # Только для первого фото этой группы запускаем таймер
+    if last_group_id != group_id:
+        async def _delayed_next():
+            # ждём, пока долетят остальные фото альбома
+            await asyncio.sleep(0.8)
+            # если состояние уже сменили — выходим
+            if await state.get_state() != AdminBroadcastStates.get_media:
+                return
+            cur = await state.get_data()
+            if cur.get("last_media_group_id") != group_id:
+                return
+            await _broadcast_goto_button_step(message, state)
+
+        asyncio.create_task(_delayed_next())
+
+
+def _broadcast_button_step_kb():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💫 Пропустить", callback_data="admin_broadcast_cta_skip")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_broadcast_cta_back")],
+        ]
+    )
+
+
+async def _broadcast_goto_button_step(message: types.Message, state: FSMContext):
+    """Переход к шагу настройки текста инлайн-кнопки."""
+    await state.set_state(AdminBroadcastStates.button_text)
+    await message.answer(
+        "Отправьте текст для инлайн кнопки",
+        reply_markup=_broadcast_button_step_kb(),
+    )
 
 
 @router.message(AdminBroadcastStates.get_media, F.document)
@@ -637,7 +719,15 @@ async def admin_broadcast_media_doc(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS:
         return
     file_id = message.document.file_id
-    await state.update_data(media_file_id=file_id, media_type="document")
+    data = await state.get_data()
+    media_items = data.get("media_items") or []
+    media_kind = data.get("media_kind")
+    if media_items and media_kind != "document":
+        await message.answer("Уже добавлены фото. Сейчас можно либо альбом из фото, либо один файл.")
+        return
+    # Для файла поддерживаем только один файл в посте
+    media_items = [{"type": "document", "file_id": file_id}]
+    await state.update_data(media_items=media_items, media_kind="document")
     await state.set_state(AdminBroadcastStates.confirm)
     await _admin_broadcast_confirm(message, state)
 
@@ -647,7 +737,72 @@ async def admin_broadcast_skip_media(callback: types.CallbackQuery, state: FSMCo
     if callback.from_user.id not in ADMIN_IDS:
         await callback.answer()
         return
-    await state.update_data(media_file_id=None, media_type=None)
+    # Явный переход к шагу настройки кнопки (без фото / только с уже добавленными)
+    await _broadcast_goto_button_step(callback.message, state)
+    await callback.answer()
+
+
+@router.callback_query(AdminBroadcastStates.button_text, F.data == "admin_broadcast_cta_skip")
+async def admin_broadcast_cta_skip(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    await state.update_data(cta_text=None, add_cta=False)
+    await state.set_state(AdminBroadcastStates.confirm)
+    await _admin_broadcast_confirm(callback.message, state, callback)
+    await callback.answer()
+
+
+@router.callback_query(AdminBroadcastStates.button_text, F.data == "admin_broadcast_cta_back")
+async def admin_broadcast_cta_back(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    await state.set_state(AdminBroadcastStates.get_media)
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💫 Пропустить медиа", callback_data="admin_broadcast_skip_media")],
+            [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_broadcast_cancel")],
+        ]
+    )
+    await callback.message.edit_text(
+        "Отправьте одно или несколько для рассылки (до 10 фото в один пост)",
+        reply_markup=kb,
+    )
+    await callback.answer()
+
+
+@router.message(AdminBroadcastStates.button_text, F.text)
+async def admin_broadcast_button_text(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    raw = (message.text or "").strip()
+    if raw in ("-", ""):
+        cta_text = None
+        add_cta = False
+    else:
+        cta_text = raw
+        add_cta = True
+    await state.update_data(cta_text=cta_text, add_cta=add_cta)
+    await state.set_state(AdminBroadcastStates.confirm)
+    await _admin_broadcast_confirm(message, state)
+
+
+@router.callback_query(AdminBroadcastStates.get_media, F.data == "admin_broadcast_more_media")
+async def admin_broadcast_more_media(callback: types.CallbackQuery, state: FSMContext):
+    """Технический хэндлер для клавиатуры — просто подсказываем, что можно слать ещё фото."""
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    await callback.answer("Отправьте ещё фото для этой рассылки.")
+
+
+@router.callback_query(AdminBroadcastStates.get_media, F.data == "admin_broadcast_to_confirm")
+async def admin_broadcast_to_confirm(callback: types.CallbackQuery, state: FSMContext):
+    """Переход к шагу подтверждения с предпросмотром."""
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
     await state.set_state(AdminBroadcastStates.confirm)
     await _admin_broadcast_confirm(callback.message, state, callback)
 
@@ -655,13 +810,14 @@ async def admin_broadcast_skip_media(callback: types.CallbackQuery, state: FSMCo
 async def _admin_broadcast_confirm(msg_target, state: FSMContext, callback=None):
     data = await state.get_data()
     text = data.get("broadcast_text", "")
-    media_id = data.get("media_file_id")
-    media_type = data.get("media_type")
+    media_items = data.get("media_items") or []
+    media_kind = data.get("media_kind")
+    cta_text = (data.get("cta_text") or "").strip() or None
     filter_type = data.get("broadcast_filter", "all")
     user_ids = get_users_for_broadcast(filter_type)
     count = len(user_ids)
 
-    if not text and not media_id:
+    if not text and not media_items:
         err = "Добавьте текст или медиа."
         if callback:
             await callback.message.edit_text(err)
@@ -671,19 +827,29 @@ async def _admin_broadcast_confirm(msg_target, state: FSMContext, callback=None)
         return
 
     preview_raw = (text[:100] + "...") if len(text) > 100 else (text or "(нет)")
-    preview = f"Текст: {preview_raw}\n\nПолучателей: {count}"
-    if media_id:
-        preview = f"Текст: {preview_raw}\nМедиа: {media_type}\n\nПолучателей: {count}"
+    if media_items:
+        if media_kind == "photo":
+            media_desc = f"фото x{len(media_items)}"
+        elif media_kind == "document":
+            media_desc = "файл"
+        else:
+            media_desc = "медиа"
+        preview = f"Текст: {preview_raw}\nМедиа: {media_desc}\n\nПолучателей: {count}"
+    else:
+        preview = f"Текст: {preview_raw}\n\nПолучателей: {count}"
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="Всем", callback_data="admin_broadcast_filter_all"),
-            InlineKeyboardButton(text="С заявкой", callback_data="admin_broadcast_filter_with_lead"),
-            InlineKeyboardButton(text="Без заявки", callback_data="admin_broadcast_filter_without_lead"),
-        ],
-        [InlineKeyboardButton(text="✅ Отправить", callback_data="admin_broadcast_send")],
-        [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_broadcast_cancel")],
-    ])
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Всем", callback_data="admin_broadcast_filter_all"),
+                InlineKeyboardButton(text="С заявкой", callback_data="admin_broadcast_filter_with_lead"),
+                InlineKeyboardButton(text="Без заявки", callback_data="admin_broadcast_filter_without_lead"),
+            ],
+            [InlineKeyboardButton(text="👁 Предпросмотр", callback_data="admin_broadcast_preview")],
+            [InlineKeyboardButton(text="✅ Отправить", callback_data="admin_broadcast_send")],
+            [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_broadcast_cancel")],
+        ]
+    )
     if callback:
         await callback.message.edit_text(f"📤 Подтверждение рассылки\n\n{preview}", reply_markup=kb)
         await callback.answer()
@@ -702,6 +868,66 @@ async def admin_broadcast_filter(callback: types.CallbackQuery, state: FSMContex
     await _admin_broadcast_confirm(callback.message, state, callback)
 
 
+@router.callback_query(AdminBroadcastStates.confirm, F.data == "admin_broadcast_preview")
+async def admin_broadcast_preview(callback: types.CallbackQuery, state: FSMContext):
+    """Живой предпросмотр из финального шага (форма уже с кнопкой/фильтрами)."""
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    data = await state.get_data()
+    text = data.get("broadcast_text", "")
+    media_items = data.get("media_items") or []
+    media_kind = data.get("media_kind")
+    cta_text = (data.get("cta_text") or "").strip() or None
+    add_cta = data.get("add_cta", True)
+    if add_cta and cta_text is None:
+        cta_text = "Записаться на игру"
+    bot = callback.bot
+    chat_id = callback.message.chat.id
+    kb_cta = None
+    if add_cta and cta_text:
+        kb_cta = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text=cta_text, callback_data="menu_record")]
+            ]
+        )
+    html_caption = broadcast_text_to_html(text) if text else None
+
+    try:
+        if media_items and media_kind == "photo":
+            await bot.send_photo(
+                chat_id,
+                media_items[0]["file_id"],
+                caption=html_caption or None,
+                parse_mode="HTML" if html_caption else None,
+                reply_markup=kb_cta,
+            )
+        elif media_items and media_kind == "document":
+            await bot.send_document(
+                chat_id,
+                media_items[0]["file_id"],
+                caption=html_caption or None,
+                parse_mode="HTML" if html_caption else None,
+                reply_markup=kb_cta,
+            )
+        else:
+            await bot.send_message(
+                chat_id,
+                html_caption or "—",
+                parse_mode="HTML" if html_caption else None,
+                reply_markup=kb_cta,
+            )
+    except Exception:
+        pass
+    await callback.answer("Предпросмотр отправлен.")
+
+
+@router.callback_query(F.data == "admin_broadcast_toggle_cta")
+async def admin_broadcast_toggle_cta(callback: types.CallbackQuery, state: FSMContext):
+    # Хэндлер больше не используется (кнопки нет), оставлен заглушкой на случай старых апдейтов
+    await callback.answer()
+
+
 @router.callback_query(F.data == "admin_broadcast_send")
 async def admin_broadcast_send(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
@@ -709,25 +935,54 @@ async def admin_broadcast_send(callback: types.CallbackQuery, state: FSMContext)
         return
     data = await state.get_data()
     text = data.get("broadcast_text", "")
-    media_id = data.get("media_file_id")
-    media_type = data.get("media_type")
-    if not text and not media_id:
+    media_items = data.get("media_items") or []
+    media_kind = data.get("media_kind")
+    cta_text = (data.get("cta_text") or "").strip() or None
+    add_cta = data.get("add_cta", True)
+    if add_cta and cta_text is None:
+        cta_text = "Записаться на игру"
+    if not text and not media_items:
         await callback.answer("Добавьте текст или медиа.", show_alert=True)
         return
     filter_type = data.get("broadcast_filter", "all")
     user_ids = get_users_for_broadcast(filter_type)
     await state.clear()
 
+    kb_cta = None
+    if add_cta and cta_text:
+        kb_cta = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text=cta_text, callback_data="menu_record")]
+            ]
+        )
+    html_caption = broadcast_text_to_html(text) if text else None
     await callback.message.edit_text(f"📤 Отправка {len(user_ids)} пользователям...")
     sent, failed = 0, 0
     for uid in user_ids:
         try:
-            if media_id and media_type == "photo":
-                await callback.bot.send_photo(uid, photo=media_id, caption=text or None)
-            elif media_id and media_type == "document":
-                await callback.bot.send_document(uid, document=media_id, caption=text or None)
+            if media_items and media_kind == "photo":
+                await callback.bot.send_photo(
+                    uid,
+                    photo=media_items[0]["file_id"],
+                    caption=html_caption or None,
+                    parse_mode="HTML" if html_caption else None,
+                    reply_markup=kb_cta,
+                )
+            elif media_items and media_kind == "document":
+                await callback.bot.send_document(
+                    uid,
+                    document=media_items[0]["file_id"],
+                    caption=html_caption or None,
+                    parse_mode="HTML" if html_caption else None,
+                    reply_markup=kb_cta,
+                )
             else:
-                await callback.bot.send_message(uid, text=text or "—")
+                await callback.bot.send_message(
+                    uid,
+                    html_caption or "—",
+                    parse_mode="HTML" if html_caption else None,
+                    reply_markup=kb_cta,
+                )
             sent += 1
         except Exception:
             failed += 1
@@ -993,8 +1248,7 @@ async def admin_edit_story_text_save(message: types.Message, state: FSMContext):
     sid = data["sid"]
     scenario_id = data["scenario_id"]
     new_text = message.text.strip()
-    
-    update_story(sid, title=new_text, content=new_text)
+    update_story(sid, content=new_text)  # title остаётся "Сюжет N"
     
     await state.clear()
     await message.answer("✅ Текст обновлён.")
@@ -1112,12 +1366,12 @@ async def _finish_add_story(message: types.Message, state: FSMContext):
     image_url = data.get("image_url", "")
     scenario_id = data.get("scenario_id")
     
-    # Считаем order_num: сколько уже есть сюжетов
+    # Считаем order_num: сколько уже есть сюжетов (Сюжет 1, Сюжет 2, ...)
     existing = get_stories_by_scenario(scenario_id)
     order_num = len(existing)
     
     add_story(
-        title=content, # Используем контент как заголовок для простоты
+        title=f"Сюжет {order_num + 1}",
         content=content,
         image_url=image_url,
         game_id=None,

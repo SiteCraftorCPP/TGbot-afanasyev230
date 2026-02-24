@@ -6,6 +6,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import OPERATOR_CHAT_ID
 from database import get_visible_games, add_lead, get_game, get_user_utm
 from handlers.stories import show_story_screen
+from utils import text_to_telegram_html
 
 router = Router()
 
@@ -70,15 +71,18 @@ async def start_record(callback_or_msg, state: FSMContext):
             ]
         )
         if is_callback and bot:
-            try:
-                await bot.edit_message_text(chat_id=msg.chat.id, message_id=msg.message_id, text=text, reply_markup=kb)
-            except Exception:
-                # Если вызвали из медиа-сообщения (например, из "Сюжеты"), edit_message_text упадёт.
-                try:
-                    await bot.delete_message(chat_id=msg.chat.id, message_id=msg.message_id)
-                except Exception:
-                    pass
+            # Если сообщение с фото (рассылка и т.п.) — не трогаем его, шлём меню новым сообщением
+            if getattr(msg, "photo", None):
                 await bot.send_message(chat_id=msg.chat.id, text=text, reply_markup=kb)
+            else:
+                try:
+                    await bot.edit_message_text(chat_id=msg.chat.id, message_id=msg.message_id, text=text, reply_markup=kb)
+                except Exception:
+                    try:
+                        await bot.delete_message(chat_id=msg.chat.id, message_id=msg.message_id)
+                    except Exception:
+                        pass
+                    await bot.send_message(chat_id=msg.chat.id, text=text, reply_markup=kb)
         else:
             await msg.answer(text, reply_markup=kb)
         await state.clear()
@@ -87,14 +91,17 @@ async def start_record(callback_or_msg, state: FSMContext):
     text = "Выбери игру/дату:"
     kb = _games_keyboard()
     if is_callback and bot:
-        try:
-            await bot.edit_message_text(chat_id=msg.chat.id, message_id=msg.message_id, text=text, reply_markup=kb)
-        except Exception:
-            try:
-                await bot.delete_message(chat_id=msg.chat.id, message_id=msg.message_id)
-            except Exception:
-                pass
+        if getattr(msg, "photo", None):
             await bot.send_message(chat_id=msg.chat.id, text=text, reply_markup=kb)
+        else:
+            try:
+                await bot.edit_message_text(chat_id=msg.chat.id, message_id=msg.message_id, text=text, reply_markup=kb)
+            except Exception:
+                try:
+                    await bot.delete_message(chat_id=msg.chat.id, message_id=msg.message_id)
+                except Exception:
+                    pass
+                await bot.send_message(chat_id=msg.chat.id, text=text, reply_markup=kb)
     else:
         await msg.answer(text, reply_markup=kb)
     await state.set_state(RecordStates.choose_game)
@@ -122,10 +129,12 @@ async def record_choose_game(callback: types.CallbackQuery, state: FSMContext):
     # Убрали привязку к игре - больше не проверяем сюжеты для конкретной игры
     
     kb = _count_keyboard()
+    name_fmt = text_to_telegram_html(g[1])
     await callback.bot.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        text=f"Выбрано: {g[1]}\n{g[2]} {g[3] or ''}\n\nСколько человек будет?",
+        text=f"Выбрано: {name_fmt}\n{g[2]} {g[3] or ''}\n\nСколько человек будет?",
+        parse_mode="HTML",
         reply_markup=kb,
     )
     await state.set_state(RecordStates.choose_count)
@@ -189,11 +198,12 @@ async def record_back_from_story(callback: types.CallbackQuery, state: FSMContex
     game_id = data.get("game_id")
     
     kb = _count_keyboard()
-    
+    name_fmt = text_to_telegram_html(game_name)
     await callback.bot.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        text=f"Выбрано: {game_name}\n\nСколько человек будет?",
+        text=f"Выбрано: {name_fmt}\n\nСколько человек будет?",
+        parse_mode="HTML",
         reply_markup=kb,
     )
     await safe_answer_callback(callback)
@@ -309,9 +319,10 @@ async def record_skip_comment(callback: types.CallbackQuery, state: FSMContext):
 
 async def _show_confirm(msg_target, state: FSMContext, callback=None):
     data = await state.get_data()
+    name_fmt = text_to_telegram_html(data["game_name"])
     text = (
         f"✓ Проверь заявку:\n\n"
-        f"Игра: {data['game_name']}\n"
+        f"Игра: {name_fmt}\n"
         f"Участников: {data['participants_count']}\n"
         f"Контакт: {data.get('phone') or '—'}\n"
         f"Комментарий: {data.get('comment') or '—'}\n\n"
@@ -331,11 +342,12 @@ async def _show_confirm(msg_target, state: FSMContext, callback=None):
             chat_id=callback.message.chat.id,
             message_id=callback.message.message_id,
             text=text,
+            parse_mode="HTML",
             reply_markup=kb,
         )
         await safe_answer_callback(callback)
     else:
-        await msg_target.answer(text, reply_markup=kb)
+        await msg_target.answer(text, parse_mode="HTML", reply_markup=kb)
     await state.set_state(RecordStates.confirm)
 
 

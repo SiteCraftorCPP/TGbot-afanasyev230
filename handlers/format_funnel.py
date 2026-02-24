@@ -1,9 +1,9 @@
-"""Раздел «Что это за формат?» — один экран: картинка (если задана) + текст из админки.
-Блоки воронки (для кого подходит, не с кем играть и т.д.) здесь не отображаются."""
+"""Раздел «Что это за формат?» — один экран: картинка (если задана) + текст из админки."""
 from aiogram import Router, types, F
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
 from config import CHAT_LINK
 from database import get_format_info
+from utils import text_to_telegram_html
 
 router = Router()
 
@@ -18,6 +18,8 @@ async def format_show_screen(target):
 
     if not text:
         text = "Сюжетная игра (ролевой квест) — это как фильм, только ты внутри истории.\n\nТебе дают роль и цель, дальше события разворачиваются через общение и решения. Ведущий всё ведёт и помогает."
+    text = text_to_telegram_html(text)
+    caption = text[:CAPTION_MAX_LENGTH]
 
     kb_rows = [
         [
@@ -32,13 +34,12 @@ async def format_show_screen(target):
     kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
 
     if image_url:
-        caption = text[:CAPTION_MAX_LENGTH]  # text already escaped
         if hasattr(target, "bot") and hasattr(target, "message"):
             try:
                 await target.bot.edit_message_media(
                     chat_id=target.message.chat.id,
                     message_id=target.message.message_id,
-                    media=InputMediaPhoto(media=image_url, caption=caption),
+                    media=InputMediaPhoto(media=image_url, caption=caption, parse_mode="HTML"),
                     reply_markup=kb,
                 )
             except Exception:
@@ -53,10 +54,11 @@ async def format_show_screen(target):
                     chat_id=target.message.chat.id,
                     photo=image_url,
                     caption=caption,
+                    parse_mode="HTML",
                     reply_markup=kb,
                 )
         else:
-            await target.answer_photo(photo=image_url, caption=caption, reply_markup=kb)
+            await target.answer_photo(photo=image_url, caption=caption, parse_mode="HTML", reply_markup=kb)
     else:
         if hasattr(target, "bot") and hasattr(target, "message"):
             try:
@@ -64,6 +66,7 @@ async def format_show_screen(target):
                     chat_id=target.message.chat.id,
                     message_id=target.message.message_id,
                     text=text,
+                    parse_mode="HTML",
                     reply_markup=kb,
                 )
             except Exception:
@@ -77,7 +80,8 @@ async def format_show_screen(target):
                 await target.bot.send_message(
                     chat_id=target.message.chat.id,
                     text=text,
+                    parse_mode="HTML",
                     reply_markup=kb,
                 )
         else:
-            await target.answer(text, reply_markup=kb)
+            await target.answer(text, parse_mode="HTML", reply_markup=kb)

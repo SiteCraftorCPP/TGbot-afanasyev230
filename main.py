@@ -68,6 +68,7 @@ async def cb_menu_schedule(callback: CallbackQuery):
             chat_id=callback.message.chat.id,
             message_id=callback.message.message_id,
             text=text,
+            parse_mode="HTML",
             reply_markup=kb,
         )
     except Exception:
@@ -81,6 +82,7 @@ async def cb_menu_schedule(callback: CallbackQuery):
         await callback.bot.send_message(
             chat_id=callback.message.chat.id,
             text=text,
+            parse_mode="HTML",
             reply_markup=kb,
         )
 

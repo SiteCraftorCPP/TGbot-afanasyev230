@@ -3,6 +3,7 @@ from aiogram import Router, types, F
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import CHAT_LINK
 from database import get_story, get_scenarios, get_stories_by_scenario
+from utils import text_to_telegram_html
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -15,7 +16,7 @@ async def show_scenarios_list(callback: types.CallbackQuery):
     """Показать список сценариев кнопками."""
     scenarios = get_scenarios()
     
-    text = "📚 **Библиотека сценариев**"
+    text = text_to_telegram_html("📚 *Библиотека сценариев*")
     if not scenarios:
         text = "Пока нет доступных сценариев."
     
@@ -25,14 +26,14 @@ async def show_scenarios_list(callback: types.CallbackQuery):
         kb.append([InlineKeyboardButton(text=name, callback_data=f"story_scen_{sid}")])
     
     kb.append([InlineKeyboardButton(text="🔙 Назад в меню", callback_data="menu_back")])
-    
-    # Пытаемся редактировать или отправляем новое
+    reply_kb = InlineKeyboardMarkup(inline_keyboard=kb)
     try:
         await callback.bot.edit_message_text(
             chat_id=callback.message.chat.id,
             message_id=callback.message.message_id,
             text=text,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=kb),
+            parse_mode="HTML",
+            reply_markup=reply_kb,
         )
     except Exception:
         try:
@@ -45,7 +46,8 @@ async def show_scenarios_list(callback: types.CallbackQuery):
         await callback.bot.send_message(
             chat_id=callback.message.chat.id,
             text=text,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=kb),
+            parse_mode="HTML",
+            reply_markup=reply_kb,
         )
 
 
@@ -65,13 +67,17 @@ async def show_story_screen(bot, chat_id, message_id, story_id: int, edit: bool 
     # story: (id, title, content, image_url, game_id, order_num, hidden, scenario_id, created_at)
     sid, title, content, image_url, game_id, order_num, hidden, scen_id = story[:8]
     image_url = (image_url or "").strip()
-    
-    # Текст без parse_mode — контент из БД может содержать _ * [ ] и ломать Markdown
-    display_text = f"{title}\n\n{content}"
-    caption_plain = display_text
-    if len(display_text) > MESSAGE_MAX_LENGTH:
-        display_text = display_text[:MESSAGE_MAX_LENGTH - 3] + "..."
-    caption_for_photo = caption_plain[:CAPTION_MAX_LENGTH]
+    content = (content or "").strip()
+    # Один сюжет = один блок текста, без дублирования title+content
+    if story_index is not None and total_stories is not None:
+        header = f"Сюжет {story_index + 1}\n\n"
+    else:
+        header = ""
+    raw = f"{header}{content}"
+    if len(raw) > MESSAGE_MAX_LENGTH:
+        raw = raw[: MESSAGE_MAX_LENGTH - 3] + "..."
+    display_text = text_to_telegram_html(raw)
+    caption_for_photo = display_text[:CAPTION_MAX_LENGTH]
     
     # Кнопки навигации внутри сценария
     kb = []
@@ -111,6 +117,7 @@ async def show_story_screen(bot, chat_id, message_id, story_id: int, edit: bool 
                 chat_id=chat_id,
                 photo=image_url,
                 caption=caption_for_photo,
+                parse_mode="HTML",
                 reply_markup=reply_markup,
             )
         except Exception as e:
@@ -118,12 +125,14 @@ async def show_story_screen(bot, chat_id, message_id, story_id: int, edit: bool 
             await bot.send_message(
                 chat_id=chat_id,
                 text=display_text,
+                parse_mode="HTML",
                 reply_markup=reply_markup,
             )
     else:
         await bot.send_message(
             chat_id=chat_id,
             text=display_text,
+            parse_mode="HTML",
             reply_markup=reply_markup,
         )
 
