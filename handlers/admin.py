@@ -622,7 +622,7 @@ async def admin_broadcast_text(message: types.Message, state: FSMContext):
         ]
     )
     await message.answer(
-        "Отправьте одно или несколько для рассылки (до 10 фото в один пост)",
+        "Отправьте фото/видео",
         reply_markup=kb,
     )
 
@@ -766,7 +766,7 @@ async def admin_broadcast_cta_back(callback: types.CallbackQuery, state: FSMCont
         ]
     )
     await callback.message.edit_text(
-        "Отправьте одно или несколько для рассылки (до 10 фото в один пост)",
+        "Отправьте фото/видео",
         reply_markup=kb,
     )
     await callback.answer()
