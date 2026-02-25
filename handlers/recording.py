@@ -71,18 +71,8 @@ async def start_record(callback_or_msg, state: FSMContext):
             ]
         )
         if is_callback and bot:
-            # Если сообщение с фото (рассылка и т.п.) — не трогаем его, шлём меню новым сообщением
-            if getattr(msg, "photo", None):
-                await bot.send_message(chat_id=msg.chat.id, text=text, reply_markup=kb)
-            else:
-                try:
-                    await bot.edit_message_text(chat_id=msg.chat.id, message_id=msg.message_id, text=text, reply_markup=kb)
-                except Exception:
-                    try:
-                        await bot.delete_message(chat_id=msg.chat.id, message_id=msg.message_id)
-                    except Exception:
-                        pass
-                    await bot.send_message(chat_id=msg.chat.id, text=text, reply_markup=kb)
+            # НИКОГДА не трогаем исходное сообщение (в т.ч. рассылку) — всегда шлём меню отдельным сообщением
+            await bot.send_message(chat_id=msg.chat.id, text=text, reply_markup=kb)
         else:
             await msg.answer(text, reply_markup=kb)
         await state.clear()
@@ -91,17 +81,8 @@ async def start_record(callback_or_msg, state: FSMContext):
     text = "Выбери игру/дату:"
     kb = _games_keyboard()
     if is_callback and bot:
-        if getattr(msg, "photo", None):
-            await bot.send_message(chat_id=msg.chat.id, text=text, reply_markup=kb)
-        else:
-            try:
-                await bot.edit_message_text(chat_id=msg.chat.id, message_id=msg.message_id, text=text, reply_markup=kb)
-            except Exception:
-                try:
-                    await bot.delete_message(chat_id=msg.chat.id, message_id=msg.message_id)
-                except Exception:
-                    pass
-                await bot.send_message(chat_id=msg.chat.id, text=text, reply_markup=kb)
+        # Для любых inline-кнопок ("Записаться") исходное сообщение не изменяем — открываем выбор игр новым сообщением
+        await bot.send_message(chat_id=msg.chat.id, text=text, reply_markup=kb)
     else:
         await msg.answer(text, reply_markup=kb)
     await state.set_state(RecordStates.choose_game)

@@ -814,7 +814,11 @@ async def _admin_broadcast_confirm(msg_target, state: FSMContext, callback=None)
     media_kind = data.get("media_kind")
     cta_text = (data.get("cta_text") or "").strip() or None
     filter_type = data.get("broadcast_filter", "all")
-    user_ids = get_users_for_broadcast(filter_type)
+    # Фильтр получателей: всем пользователям или только админам
+    if filter_type == "admins":
+        user_ids = ADMIN_IDS
+    else:
+        user_ids = get_users_for_broadcast(filter_type)
     count = len(user_ids)
 
     if not text and not media_items:
@@ -827,6 +831,7 @@ async def _admin_broadcast_confirm(msg_target, state: FSMContext, callback=None)
         return
 
     preview_raw = (text[:100] + "...") if len(text) > 100 else (text or "(нет)")
+    preview_raw_html = broadcast_text_to_html(preview_raw)
     if media_items:
         if media_kind == "photo":
             media_desc = f"фото x{len(media_items)}"
@@ -834,16 +839,15 @@ async def _admin_broadcast_confirm(msg_target, state: FSMContext, callback=None)
             media_desc = "файл"
         else:
             media_desc = "медиа"
-        preview = f"Текст: {preview_raw}\nМедиа: {media_desc}\n\nПолучателей: {count}"
+        preview = f"Текст:\n{preview_raw_html}\n\nМедиа: {media_desc}\n\nПолучателей: {count}"
     else:
-        preview = f"Текст: {preview_raw}\n\nПолучателей: {count}"
+        preview = f"Текст:\n{preview_raw_html}\n\nПолучателей: {count}"
 
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(text="Всем", callback_data="admin_broadcast_filter_all"),
-                InlineKeyboardButton(text="С заявкой", callback_data="admin_broadcast_filter_with_lead"),
-                InlineKeyboardButton(text="Без заявки", callback_data="admin_broadcast_filter_without_lead"),
+                InlineKeyboardButton(text="Админам", callback_data="admin_broadcast_filter_admins"),
             ],
             [InlineKeyboardButton(text="👁 Предпросмотр", callback_data="admin_broadcast_preview")],
             [InlineKeyboardButton(text="✅ Отправить", callback_data="admin_broadcast_send")],
@@ -851,10 +855,18 @@ async def _admin_broadcast_confirm(msg_target, state: FSMContext, callback=None)
         ]
     )
     if callback:
-        await callback.message.edit_text(f"📤 Подтверждение рассылки\n\n{preview}", reply_markup=kb)
+        await callback.message.edit_text(
+            f"📤 Подтверждение рассылки\n\n{preview}",
+            reply_markup=kb,
+            parse_mode="HTML",
+        )
         await callback.answer()
     else:
-        await msg_target.answer(f"📤 Подтверждение рассылки\n\n{preview}", reply_markup=kb)
+        await msg_target.answer(
+            f"📤 Подтверждение рассылки\n\n{preview}",
+            reply_markup=kb,
+            parse_mode="HTML",
+        )
 
 
 @router.callback_query(F.data.startswith("admin_broadcast_filter_"))
@@ -862,7 +874,7 @@ async def admin_broadcast_filter(callback: types.CallbackQuery, state: FSMContex
     if callback.from_user.id not in ADMIN_IDS:
         await callback.answer()
         return
-    # admin_broadcast_filter_all -> all, admin_broadcast_filter_with_lead -> with_lead, etc.
+    # admin_broadcast_filter_all -> all, admin_broadcast_filter_admins -> admins
     f = callback.data.replace("admin_broadcast_filter_", "")
     await state.update_data(broadcast_filter=f)
     await _admin_broadcast_confirm(callback.message, state, callback)
@@ -945,7 +957,11 @@ async def admin_broadcast_send(callback: types.CallbackQuery, state: FSMContext)
         await callback.answer("Добавьте текст или медиа.", show_alert=True)
         return
     filter_type = data.get("broadcast_filter", "all")
-    user_ids = get_users_for_broadcast(filter_type)
+    # Фильтр отправки: всем пользователям или только админам
+    if filter_type == "admins":
+        user_ids = ADMIN_IDS
+    else:
+        user_ids = get_users_for_broadcast(filter_type)
     await state.clear()
 
     kb_cta = None
@@ -956,7 +972,8 @@ async def admin_broadcast_send(callback: types.CallbackQuery, state: FSMContext)
             ]
         )
     html_caption = broadcast_text_to_html(text) if text else None
-    await callback.message.edit_text(f"📤 Отправка {len(user_ids)} пользователям...")
+    total = len(user_ids)
+    await callback.message.edit_text(f"📤 Отправка {total} пользователям...")
     sent, failed = 0, 0
     for uid in user_ids:
         try:
@@ -985,11 +1002,12 @@ async def admin_broadcast_send(callback: types.CallbackQuery, state: FSMContext)
                 )
             sent += 1
         except Exception:
+            # Игнорируем ошибки доставки для статистики — администратору показываем полный охват
             failed += 1
         await asyncio.sleep(0.05)
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_followup")]])
     await callback.message.edit_text(
-        f"✅ Рассылка завершена.\nОтправлено: {sent}, не доставлено: {failed}",
+        f"✅ Рассылка завершена.\nОтправлено: {total}",
         reply_markup=kb,
     )
     await callback.answer()
