@@ -736,8 +736,7 @@ async def admin_broadcast_media_video(message: types.Message, state: FSMContext)
         return
     media_items = [{"type": "video", "file_id": file_id}]
     await state.update_data(media_items=media_items, media_kind="video")
-    await state.set_state(AdminBroadcastStates.confirm)
-    await _admin_broadcast_confirm(message, state)
+    await _broadcast_goto_button_step(message, state)
 
 
 @router.message(AdminBroadcastStates.get_media, F.document)
@@ -752,16 +751,16 @@ async def admin_broadcast_media_doc(message: types.Message, state: FSMContext):
     if media_items and media_kind not in (None, "document", "video"):
         await message.answer("Уже добавлены фото. Сейчас можно либо альбом из фото, либо один файл/видео.")
         return
-    # Если документ — видео (mp4 и т.д.), сохраняем как видео, чтобы в рассылке шло нормальное видео с превью
+    # Если документ — видео (mp4 и т.д.), сохраняем как видео и переходим к шагу кнопки (как для фото)
     if _is_video_document(doc):
         media_items = [{"type": "video", "file_id": file_id}]
-        kind = "video"
+        await state.update_data(media_items=media_items, media_kind="video")
+        await _broadcast_goto_button_step(message, state)
     else:
         media_items = [{"type": "document", "file_id": file_id}]
-        kind = "document"
-    await state.update_data(media_items=media_items, media_kind=kind)
-    await state.set_state(AdminBroadcastStates.confirm)
-    await _admin_broadcast_confirm(message, state)
+        await state.update_data(media_items=media_items, media_kind="document")
+        await state.set_state(AdminBroadcastStates.confirm)
+        await _admin_broadcast_confirm(message, state)
 
 
 @router.callback_query(AdminBroadcastStates.get_media, F.data == "admin_broadcast_skip_media")
