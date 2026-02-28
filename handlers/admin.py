@@ -714,20 +714,52 @@ async def _broadcast_goto_button_step(message: types.Message, state: FSMContext)
     )
 
 
+def _is_video_document(doc) -> bool:
+    """Файл считается видео, если mime_type или расширение указывают на видео."""
+    if getattr(doc, "mime_type", None) and str(doc.mime_type).startswith("video/"):
+        return True
+    fn = (getattr(doc, "file_name", None) or "").lower()
+    return fn.endswith((".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"))
+
+
+@router.message(AdminBroadcastStates.get_media, F.video)
+async def admin_broadcast_media_video(message: types.Message, state: FSMContext):
+    """Видео, отправленное как видео (не как файл) — уходит в рассылку как нормальное видео с превью."""
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    file_id = message.video.file_id
+    data = await state.get_data()
+    media_items = data.get("media_items") or []
+    media_kind = data.get("media_kind")
+    if media_items and media_kind not in (None, "video"):
+        await message.answer("Уже добавлены фото/файл. В одной рассылке либо фото (альбом), либо один файл/видео.")
+        return
+    media_items = [{"type": "video", "file_id": file_id}]
+    await state.update_data(media_items=media_items, media_kind="video")
+    await state.set_state(AdminBroadcastStates.confirm)
+    await _admin_broadcast_confirm(message, state)
+
+
 @router.message(AdminBroadcastStates.get_media, F.document)
 async def admin_broadcast_media_doc(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS:
         return
-    file_id = message.document.file_id
+    doc = message.document
+    file_id = doc.file_id
     data = await state.get_data()
     media_items = data.get("media_items") or []
     media_kind = data.get("media_kind")
-    if media_items and media_kind != "document":
-        await message.answer("Уже добавлены фото. Сейчас можно либо альбом из фото, либо один файл.")
+    if media_items and media_kind not in (None, "document", "video"):
+        await message.answer("Уже добавлены фото. Сейчас можно либо альбом из фото, либо один файл/видео.")
         return
-    # Для файла поддерживаем только один файл в посте
-    media_items = [{"type": "document", "file_id": file_id}]
-    await state.update_data(media_items=media_items, media_kind="document")
+    # Если документ — видео (mp4 и т.д.), сохраняем как видео, чтобы в рассылке шло нормальное видео с превью
+    if _is_video_document(doc):
+        media_items = [{"type": "video", "file_id": file_id}]
+        kind = "video"
+    else:
+        media_items = [{"type": "document", "file_id": file_id}]
+        kind = "document"
+    await state.update_data(media_items=media_items, media_kind=kind)
     await state.set_state(AdminBroadcastStates.confirm)
     await _admin_broadcast_confirm(message, state)
 
@@ -814,7 +846,7 @@ async def _admin_broadcast_confirm(msg_target, state: FSMContext, callback=None)
     media_kind = data.get("media_kind")
     cta_text = (data.get("cta_text") or "").strip() or None
     filter_type = data.get("broadcast_filter", "all")
-    # Фильтр получателей: всем пользователям или только админам
+    # Фильтр получателей: всем / с заявкой / только админам
     if filter_type == "admins":
         user_ids = ADMIN_IDS
     else:
@@ -835,6 +867,8 @@ async def _admin_broadcast_confirm(msg_target, state: FSMContext, callback=None)
     if media_items:
         if media_kind == "photo":
             media_desc = f"фото x{len(media_items)}"
+        elif media_kind == "video":
+            media_desc = "видео"
         elif media_kind == "document":
             media_desc = "файл"
         else:
@@ -847,6 +881,7 @@ async def _admin_broadcast_confirm(msg_target, state: FSMContext, callback=None)
         inline_keyboard=[
             [
                 InlineKeyboardButton(text="Всем", callback_data="admin_broadcast_filter_all"),
+                InlineKeyboardButton(text="С заявкой", callback_data="admin_broadcast_filter_with_lead"),
                 InlineKeyboardButton(text="Админам", callback_data="admin_broadcast_filter_admins"),
             ],
             [InlineKeyboardButton(text="👁 Предпросмотр", callback_data="admin_broadcast_preview")],
@@ -914,6 +949,14 @@ async def admin_broadcast_preview(callback: types.CallbackQuery, state: FSMConte
                 parse_mode="HTML" if html_caption else None,
                 reply_markup=kb_cta,
             )
+        elif media_items and media_kind == "video":
+            await bot.send_video(
+                chat_id,
+                media_items[0]["file_id"],
+                caption=html_caption or None,
+                parse_mode="HTML" if html_caption else None,
+                reply_markup=kb_cta,
+            )
         elif media_items and media_kind == "document":
             await bot.send_document(
                 chat_id,
@@ -957,7 +1000,6 @@ async def admin_broadcast_send(callback: types.CallbackQuery, state: FSMContext)
         await callback.answer("Добавьте текст или медиа.", show_alert=True)
         return
     filter_type = data.get("broadcast_filter", "all")
-    # Фильтр отправки: всем пользователям или только админам
     if filter_type == "admins":
         user_ids = ADMIN_IDS
     else:
@@ -981,6 +1023,14 @@ async def admin_broadcast_send(callback: types.CallbackQuery, state: FSMContext)
                 await callback.bot.send_photo(
                     uid,
                     photo=media_items[0]["file_id"],
+                    caption=html_caption or None,
+                    parse_mode="HTML" if html_caption else None,
+                    reply_markup=kb_cta,
+                )
+            elif media_items and media_kind == "video":
+                await callback.bot.send_video(
+                    uid,
+                    video=media_items[0]["file_id"],
                     caption=html_caption or None,
                     parse_mode="HTML" if html_caption else None,
                     reply_markup=kb_cta,
