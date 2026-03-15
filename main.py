@@ -1,12 +1,24 @@
 import asyncio
+from datetime import datetime, timezone
+
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 
-from config import BOT_TOKEN, ADMIN_IDS, CHAT_LINK
-from database import get_game
-from database import create_tables, save_user_utm, add_subscription
+from config import BOT_TOKEN, ADMIN_IDS, CHAT_LINK, POST_CHANNEL_1, POST_CHANNEL_2, POST_CHAT_ID
+from database import (
+    get_game,
+    create_tables,
+    save_user_utm,
+    add_subscription,
+    get_subscriptions,
+    get_active_funnel_steps,
+    was_funnel_step_sent,
+    mark_funnel_step_sent,
+    get_due_scheduled_posts,
+    mark_scheduled_post_status,
+)
 from middlewares.user_log import UserLogMiddleware
 from keyboards import MENU_KB, MENU_TEXT
 from handlers.main import router as main_router
@@ -149,6 +161,108 @@ async def cb_menu_back(callback: CallbackQuery, state: FSMContext):
         reply_markup=MENU_KB,
     )
 
+
+def _funnel_build_queue():
+    """Синхронно собирает очередь (tg_id, step_id, text, media_type, media_file_id). В потоке, чтобы не блокировать event loop."""
+    steps = get_active_funnel_steps()
+    if not steps:
+        return []
+    subs = get_subscriptions(limit=100000)
+    now = datetime.now(timezone.utc)
+    queue = []
+    for tg_id, username, first_name, last_name, started_at in subs:
+        if not started_at:
+            continue
+        try:
+            s = str(started_at).replace("Z", "+00:00").strip()
+            started_dt = datetime.fromisoformat(s)
+            if started_dt.tzinfo is None:
+                started_dt = started_dt.replace(tzinfo=timezone.utc)
+        except Exception:
+            continue
+        delta_hours = (now - started_dt).total_seconds() / 3600.0
+        for step in steps:
+            step_id, order_num, delay_hours, text, media_type, media_file_id = step
+            if delta_hours < float(delay_hours or 0):
+                continue
+            if was_funnel_step_sent(tg_id, step_id):
+                continue
+            queue.append((tg_id, step_id, text or "", media_type, media_file_id))
+    return queue
+
+
+# Макс. сообщений автоворонки за один проход — чтобы не перегружать сессию и не задерживать ответы юзеру
+FUNNEL_SENDS_PER_CYCLE = 15
+
+async def funnel_worker():
+    """Фоновый воркер автоворонки. Сбор очереди в executor; за цикл шлём не больше FUNNEL_SENDS_PER_CYCLE."""
+    loop = asyncio.get_event_loop()
+    while True:
+        try:
+            queue = await loop.run_in_executor(None, _funnel_build_queue)
+            for tg_id, step_id, text, media_type, media_file_id in queue[:FUNNEL_SENDS_PER_CYCLE]:
+                try:
+                    if media_type == "photo" and media_file_id:
+                        await bot.send_photo(tg_id, media_file_id, caption=text or None)
+                    elif media_type == "video" and media_file_id:
+                        await bot.send_video(tg_id, media_file_id, caption=text or None)
+                    elif media_type == "document" and media_file_id:
+                        await bot.send_document(tg_id, media_file_id, caption=text or None)
+                    elif text:
+                        await bot.send_message(tg_id, text)
+                    else:
+                        continue
+                    mark_funnel_step_sent(tg_id, step_id)
+                except Exception:
+                    continue
+                await asyncio.sleep(0.08)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"Ошибка воркера автоворонки: {e}")
+        await asyncio.sleep(60)
+
+
+async def scheduled_posts_worker():
+    """Фоновый воркер отложенных постов."""
+    while True:
+        try:
+            now_utc = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            posts = get_due_scheduled_posts(now_utc, limit=50)
+            for pid, text, media_type, media_file_id, to_ch1, to_ch2, to_chat in posts:
+                targets = []
+                if to_ch1 and POST_CHANNEL_1 is not None:
+                    targets.append(POST_CHANNEL_1)
+                if to_ch2 and POST_CHANNEL_2 is not None:
+                    targets.append(POST_CHANNEL_2)
+                if to_chat and POST_CHAT_ID is not None:
+                    targets.append(POST_CHAT_ID)
+                if not targets:
+                    mark_scheduled_post_status(pid, "failed", "Нет целевых чатов/каналов для отправки")
+                    continue
+                ok = True
+                err = ""
+                for chat_id in targets:
+                    try:
+                        if media_type == "photo" and media_file_id:
+                            await bot.send_photo(chat_id, media_file_id, caption=text or None)
+                        elif media_type == "video" and media_file_id:
+                            await bot.send_video(chat_id, media_file_id, caption=text or None)
+                        elif media_type == "document" and media_file_id:
+                            await bot.send_document(chat_id, media_file_id, caption=text or None)
+                        else:
+                            await bot.send_message(chat_id, text or "")
+                        await asyncio.sleep(0.1)
+                    except Exception as e:
+                        ok = False
+                        err = str(e)[:200]
+                mark_scheduled_post_status(pid, "sent" if ok else "failed", err)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"Ошибка воркера отложенных постов: {e}")
+        await asyncio.sleep(30)
+
 dp.include_router(admin_router)  # первым — admin callbacks (adm_edit_, adm_ef_ и т.д.)
 dp.include_router(question_router)
 dp.include_router(holiday_router)
@@ -188,8 +302,23 @@ async def main():
     from database import seed_demo_data
     seed_demo_data()
     print("Бот запущен. ADMIN_IDS:", ADMIN_IDS or "(пусто)")
+    funnel_task = asyncio.create_task(funnel_worker())
+    scheduled_task = asyncio.create_task(scheduled_posts_worker())
     try:
         await dp.start_polling(bot)
+    except asyncio.CancelledError:
+        print("\nБот остановлен.")
+        for task in (funnel_task, scheduled_task):
+            task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+        try:
+            await bot.session.close()
+        except Exception:
+            pass
+        raise
     except KeyboardInterrupt:
         print("\nБот остановлен пользователем.")
     except Exception as e:
@@ -198,4 +327,7 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nВыход.")

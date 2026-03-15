@@ -14,7 +14,9 @@ from aiogram.types import (
     InputMediaPhoto,
 )
 
-from config import ADMIN_IDS
+from config import ADMIN_IDS, POST_CHANNEL_1, POST_CHANNEL_2, POST_CHAT_ID
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from utils import broadcast_text_to_html
 from database import (
     get_all_games,
@@ -48,6 +50,13 @@ from database import (
     swap_story_order,
     get_format_info,
     update_format_info,
+    get_funnel_steps,
+    add_funnel_step,
+    update_funnel_step,
+    delete_funnel_step,
+    get_scheduled_posts,
+    add_scheduled_post,
+    cancel_scheduled_post,
 )
 
 router = Router()
@@ -93,6 +102,20 @@ class AdminBroadcastStates(StatesGroup):
     confirm = State()
 
 
+class AdminFunnelStates(StatesGroup):
+    add_delay = State()
+    add_content = State()
+    edit_delay = State()
+    edit_content = State()
+
+
+class AdminScheduledStates(StatesGroup):
+    text = State()
+    media = State()
+    datetime = State()
+    targets = State()
+
+
 
 def _admin_only(func):
     async def wrapper(event, *args, **kwargs):
@@ -116,6 +139,8 @@ async def cmd_admin(message: types.Message):
             [InlineKeyboardButton(text="📝 Формат", callback_data="admin_format")],
             [InlineKeyboardButton(text="📈 Лиды", callback_data="admin_leads")],
             [InlineKeyboardButton(text="🔄 Follow-up", callback_data="admin_followup")],
+            [InlineKeyboardButton(text="📬 Автоворонка", callback_data="admin_funnel")],
+            [InlineKeyboardButton(text="📅 Отложенные посты", callback_data="admin_scheduled")],
         ]
     )
     await message.answer("Админ-панель:", reply_markup=kb)
@@ -533,6 +558,284 @@ def _followup_kb():
     )
 
 
+# --- Scheduled posts (отложенный постинг в каналы/чат) ---
+
+
+def _scheduled_list_text_and_kb():
+    rows = get_scheduled_posts(limit=50)
+    msk = ZoneInfo("Europe/Moscow")
+    if not rows:
+        text = "📅 Отложенные посты\n\nПока нет запланированных постов."
+    else:
+        lines = ["📅 Отложенные посты:\n"]
+        for pid, txt, media_type, media_file_id, to_ch1, to_ch2, to_chat, run_at_utc, status, last_error in rows:
+            try:
+                dt_utc = datetime.fromisoformat(str(run_at_utc))
+                if dt_utc.tzinfo is None:
+                    dt_utc = dt_utc.replace(tzinfo=ZoneInfo("UTC"))
+                dt_msk = dt_utc.astimezone(msk)
+                ts = dt_msk.strftime("%d.%m.%Y %H:%M")
+            except Exception:
+                ts = str(run_at_utc)
+            targets = []
+            if to_ch1:
+                targets.append("Канал 1")
+            if to_ch2:
+                targets.append("Канал 2")
+            if to_chat:
+                targets.append("Чат")
+            targets_str = ", ".join(targets) if targets else "—"
+            preview = (txt or "").strip()
+            if not preview and media_type:
+                preview = f"[{media_type}]"
+            if len(preview) > 60:
+                preview = preview[:60] + "..."
+            lines.append(f"#{pid} [{status}] {ts} → {targets_str}\n{preview}\n")
+        text = "\n".join(lines)
+
+    kb_rows = [
+        [InlineKeyboardButton(text="➕ Новый пост", callback_data="admin_scheduled_new")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")],
+    ]
+    # Кнопки отмены для каждого поста
+    for pid, *_ in rows:
+        kb_rows.insert(
+            0,
+            [InlineKeyboardButton(text=f"🗑 Отменить #{pid}", callback_data=f"admin_scheduled_cancel_{pid}")],
+        )
+
+    return text, InlineKeyboardMarkup(inline_keyboard=kb_rows)
+
+
+@router.callback_query(F.data == "admin_scheduled")
+async def admin_scheduled_root(callback: types.CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    text, kb = _scheduled_list_text_and_kb()
+    await callback.message.edit_text(text, reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_scheduled_new")
+async def admin_scheduled_new(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    await state.set_state(AdminScheduledStates.text)
+    await state.update_data(
+        sched_text="",
+        sched_media_type=None,
+        sched_media_file_id=None,
+        sched_run_at_utc=None,
+        sched_to_ch1=bool(POST_CHANNEL_1),
+        sched_to_ch2=bool(POST_CHANNEL_2),
+        sched_to_chat=bool(POST_CHAT_ID),
+    )
+    await callback.message.answer(
+        "✏️ Текст отложенного поста.\n\n"
+        "Отправьте текст сообщения или «-», если будет только медиа.",
+    )
+    await callback.answer()
+
+
+@router.message(AdminScheduledStates.text, F.text)
+async def admin_scheduled_text(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    raw = (message.text or "").strip()
+    text = "" if raw == "-" else raw
+    await state.update_data(sched_text=text)
+    await state.set_state(AdminScheduledStates.media)
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💫 Без медиа", callback_data="admin_scheduled_skip_media")],
+        ]
+    )
+    await message.answer("📎 Отправьте фото/видео/файл для поста или нажмите «Без медиа».", reply_markup=kb)
+
+
+@router.callback_query(AdminScheduledStates.media, F.data == "admin_scheduled_skip_media")
+async def admin_scheduled_skip_media(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    await state.update_data(sched_media_type=None, sched_media_file_id=None)
+    await state.set_state(AdminScheduledStates.datetime)
+    await callback.message.answer(
+        "⏰ Время публикации по МСК.\n\n"
+        "Формат: ДД.ММ.ГГГГ ЧЧ:ММ\n"
+        "Например: 25.03.2026 19:30",
+    )
+    await callback.answer()
+
+
+def _save_scheduled_media(message: types.Message, state: FSMContext, media_type: str, file_id: str):
+    return state.update_data(sched_media_type=media_type, sched_media_file_id=file_id)
+
+
+@router.message(AdminScheduledStates.media, F.photo)
+async def admin_scheduled_media_photo(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    file_id = message.photo[-1].file_id
+    await _save_scheduled_media(message, state, "photo", file_id)
+    await admin_scheduled_skip_media(
+        types.CallbackQuery(id="0", from_user=message.from_user, message=message, chat_instance="", data=""),
+        state,
+    )
+
+
+@router.message(AdminScheduledStates.media, F.video)
+async def admin_scheduled_media_video(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    file_id = message.video.file_id
+    await _save_scheduled_media(message, state, "video", file_id)
+    await admin_scheduled_skip_media(
+        types.CallbackQuery(id="0", from_user=message.from_user, message=message, chat_instance="", data=""),
+        state,
+    )
+
+
+@router.message(AdminScheduledStates.media, F.document)
+async def admin_scheduled_media_document(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    file_id = message.document.file_id
+    await _save_scheduled_media(message, state, "document", file_id)
+    await admin_scheduled_skip_media(
+        types.CallbackQuery(id="0", from_user=message.from_user, message=message, chat_instance="", data=""),
+        state,
+    )
+
+
+@router.message(AdminScheduledStates.datetime, F.text)
+async def admin_scheduled_datetime(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    raw = (message.text or "").strip()
+    try:
+        dt_msk = datetime.strptime(raw, "%d.%m.%Y %H:%M").replace(tzinfo=ZoneInfo("Europe/Moscow"))
+        dt_utc = dt_msk.astimezone(ZoneInfo("UTC"))
+    except Exception:
+        await message.answer("Не удалось разобрать дату/время. Формат: ДД.ММ.ГГГГ ЧЧ:ММ")
+        return
+    await state.update_data(sched_run_at_utc=dt_utc.isoformat(timespec="seconds"))
+    await state.set_state(AdminScheduledStates.targets)
+    await _admin_scheduled_show_targets(message, state)
+
+
+async def _admin_scheduled_show_targets(msg_target, state: FSMContext):
+    data = await state.get_data()
+    to_ch1 = bool(data.get("sched_to_ch1"))
+    to_ch2 = bool(data.get("sched_to_ch2"))
+    to_chat = bool(data.get("sched_to_chat"))
+
+    lines = ["📍 Куда отправлять пост:\n"]
+    if POST_CHANNEL_1:
+        lines.append(f"{'✅' if to_ch1 else '❌'} Канал 1")
+    if POST_CHANNEL_2:
+        lines.append(f"{'✅' if to_ch2 else '❌'} Канал 2")
+    if POST_CHAT_ID:
+        lines.append(f"{'✅' if to_chat else '❌'} Чат")
+    text = "\n".join(lines)
+
+    kb_rows = []
+    if POST_CHANNEL_1:
+        kb_rows.append([InlineKeyboardButton(text="Канал 1", callback_data="admin_scheduled_toggle_ch1")])
+    if POST_CHANNEL_2:
+        kb_rows.append([InlineKeyboardButton(text="Канал 2", callback_data="admin_scheduled_toggle_ch2")])
+    if POST_CHAT_ID:
+        kb_rows.append([InlineKeyboardButton(text="Чат", callback_data="admin_scheduled_toggle_chat")])
+    kb_rows.append([InlineKeyboardButton(text="✅ Создать пост", callback_data="admin_scheduled_create")])
+    kb_rows.append([InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_scheduled_cancel_create")])
+    kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
+
+    await msg_target.answer(text, reply_markup=kb)
+
+
+@router.callback_query(AdminScheduledStates.targets, F.data.startswith("admin_scheduled_toggle_"))
+async def admin_scheduled_toggle_target(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    data = await state.get_data()
+    key = callback.data.replace("admin_scheduled_toggle_", "")
+    if key == "ch1":
+        data["sched_to_ch1"] = not bool(data.get("sched_to_ch1"))
+    elif key == "ch2":
+        data["sched_to_ch2"] = not bool(data.get("sched_to_ch2"))
+    elif key == "chat":
+        data["sched_to_chat"] = not bool(data.get("sched_to_chat"))
+    await state.update_data(**{
+        "sched_to_ch1": data.get("sched_to_ch1"),
+        "sched_to_ch2": data.get("sched_to_ch2"),
+        "sched_to_chat": data.get("sched_to_chat"),
+    })
+    await callback.answer()
+    await _admin_scheduled_show_targets(callback.message, state)
+
+
+@router.callback_query(AdminScheduledStates.targets, F.data == "admin_scheduled_cancel_create")
+async def admin_scheduled_cancel_create(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    await state.clear()
+    await admin_scheduled_root(callback)
+
+
+@router.callback_query(AdminScheduledStates.targets, F.data == "admin_scheduled_create")
+async def admin_scheduled_create(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    data = await state.get_data()
+    text = data.get("sched_text") or ""
+    media_type = data.get("sched_media_type")
+    media_file_id = data.get("sched_media_file_id")
+    run_at_utc = data.get("sched_run_at_utc")
+    to_ch1 = bool(data.get("sched_to_ch1"))
+    to_ch2 = bool(data.get("sched_to_ch2"))
+    to_chat = bool(data.get("sched_to_chat"))
+    if not (to_ch1 or to_ch2 or to_chat):
+        await callback.answer("Нужно выбрать хотя бы один ресурс", show_alert=True)
+        return
+    if not run_at_utc:
+        await callback.answer("Не задано время публикации", show_alert=True)
+        return
+    add_scheduled_post(
+        text=text,
+        media_type=media_type,
+        media_file_id=media_file_id,
+        send_to_channel1=to_ch1,
+        send_to_channel2=to_ch2,
+        send_to_chat=to_chat,
+        run_at_utc=run_at_utc,
+    )
+    await state.clear()
+    await callback.answer("Пост запланирован")
+    text, kb = _scheduled_list_text_and_kb()
+    await callback.message.edit_text(text, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("admin_scheduled_cancel_"))
+async def admin_scheduled_cancel(callback: types.CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    try:
+        pid = int(callback.data.rsplit("_", 1)[-1])
+    except ValueError:
+        await callback.answer("Некорректный ID", show_alert=True)
+        return
+    cancel_scheduled_post(pid)
+    await callback.answer("Пост отменён")
+    text, kb = _scheduled_list_text_and_kb()
+    await callback.message.edit_text(text, reply_markup=kb)
+
+
 async def _show_followup_screen(callback: types.CallbackQuery):
     """Показать экран Follow-up (без answer — вызывающий должен ответить на callback)."""
     users_count = len(get_users_for_broadcast("all"))
@@ -699,7 +1002,9 @@ async def _broadcast_add_photo_and_maybe_next(message: types.Message, state: FSM
 def _broadcast_button_step_kb():
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="💫 Пропустить", callback_data="admin_broadcast_cta_skip")],
+            [InlineKeyboardButton(text="🔁 Раздел записи", callback_data="admin_broadcast_btn_internal")],
+            [InlineKeyboardButton(text="🌐 Своя ссылка", callback_data="admin_broadcast_btn_url")],
+            [InlineKeyboardButton(text="💫 Без кнопки", callback_data="admin_broadcast_cta_skip")],
             [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_broadcast_cta_back")],
         ]
     )
@@ -709,7 +1014,10 @@ async def _broadcast_goto_button_step(message: types.Message, state: FSMContext)
     """Переход к шагу настройки текста инлайн-кнопки."""
     await state.set_state(AdminBroadcastStates.button_text)
     await message.answer(
-        "Отправьте текст для инлайн кнопки",
+        "📌 Выберите вариант кнопки под сообщением:\n\n"
+        "1️⃣ Использовать раздел записи внутри бота\n"
+        "2️⃣ Вставить свою ссылку\n"
+        "3️⃣ Без кнопки",
         reply_markup=_broadcast_button_step_kb(),
     )
 
@@ -784,6 +1092,32 @@ async def admin_broadcast_cta_skip(callback: types.CallbackQuery, state: FSMCont
     await callback.answer()
 
 
+@router.callback_query(AdminBroadcastStates.button_text, F.data == "admin_broadcast_btn_internal")
+async def admin_broadcast_btn_internal(callback: types.CallbackQuery, state: FSMContext):
+    """Простой вариант: стандартная кнопка записи внутри бота."""
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    buttons = [
+        {"type": "internal", "text": "Записаться на игру", "callback": "menu_record"},
+    ]
+    await state.update_data(cta_buttons=buttons, add_cta=True, expect_url_only=False)
+    await state.set_state(AdminBroadcastStates.confirm)
+    await _admin_broadcast_confirm(callback.message, state, callback)
+    await callback.answer()
+
+
+@router.callback_query(AdminBroadcastStates.button_text, F.data == "admin_broadcast_btn_url")
+async def admin_broadcast_btn_url(callback: types.CallbackQuery, state: FSMContext):
+    """Вариант: одна своя ссылка. Дальше ждём URL сообщением."""
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    await state.update_data(expect_url_only=True, cta_url=None)
+    await callback.message.answer("🌐 Отправьте ссылку.")
+    await callback.answer()
+
+
 @router.callback_query(AdminBroadcastStates.button_text, F.data == "admin_broadcast_cta_back")
 async def admin_broadcast_cta_back(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
@@ -808,13 +1142,49 @@ async def admin_broadcast_button_text(message: types.Message, state: FSMContext)
     if message.from_user.id not in ADMIN_IDS:
         return
     raw = (message.text or "").strip()
-    if raw in ("-", ""):
-        cta_text = None
-        add_cta = False
+    data = await state.get_data()
+    # Простой сценарий: ждём сначала URL, потом текст для кнопки
+    if data.get("expect_url_only"):
+        url_stored = data.get("cta_url")
+        if not url_stored:
+            url = raw
+            if not (url.startswith("http://") or url.startswith("https://")):
+                await message.answer("Отправьте корректную ссылку, начинающуюся с http:// или https://")
+                return
+            await state.update_data(cta_url=url)
+            await message.answer("✏️ Отправьте текст для кнопки (например: «Перейти в канал»).")
+            return
+        else:
+            btn_text = raw or "Перейти"
+            buttons = [{"type": "url", "text": btn_text, "url": url_stored}]
+            await state.update_data(
+                cta_buttons=buttons,
+                add_cta=True,
+                expect_url_only=False,
+                cta_url=None,
+            )
     else:
-        cta_text = raw
-        add_cta = True
-    await state.update_data(cta_text=cta_text, add_cta=add_cta)
+        # Расширенный сценарий (оставляем для совместимости, если админ пришлёт текст вручную)
+        if raw in ("-", ""):
+            await state.update_data(cta_buttons=[], add_cta=False, cta_text=None)
+        else:
+            lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+            buttons = []
+            for ln in lines[:5]:  # не больше 5 кнопок
+                if "|" in ln:
+                    text_part, url_part = ln.split("|", 1)
+                    text_part = text_part.strip()
+                    url_part = url_part.strip()
+                    if not text_part or not url_part:
+                        continue
+                    buttons.append({"type": "url", "text": text_part, "url": url_part})
+                else:
+                    # Внутренняя кнопка внутри бота (menu_record)
+                    buttons.append({"type": "internal", "text": ln, "callback": "menu_record"})
+            await state.update_data(
+                cta_buttons=buttons,
+                add_cta=bool(buttons),
+            )
     await state.set_state(AdminBroadcastStates.confirm)
     await _admin_broadcast_confirm(message, state)
 
@@ -843,7 +1213,7 @@ async def _admin_broadcast_confirm(msg_target, state: FSMContext, callback=None)
     text = data.get("broadcast_text", "")
     media_items = data.get("media_items") or []
     media_kind = data.get("media_kind")
-    cta_text = (data.get("cta_text") or "").strip() or None
+    # кнопки нам здесь не нужны, только счётчик получателей
     filter_type = data.get("broadcast_filter", "all")
     # Фильтр получателей: всем / с заявкой / только админам
     if filter_type == "admins":
@@ -924,19 +1294,29 @@ async def admin_broadcast_preview(callback: types.CallbackQuery, state: FSMConte
     text = data.get("broadcast_text", "")
     media_items = data.get("media_items") or []
     media_kind = data.get("media_kind")
-    cta_text = (data.get("cta_text") or "").strip() or None
     add_cta = data.get("add_cta", True)
-    if add_cta and cta_text is None:
-        cta_text = "Записаться на игру"
     bot = callback.bot
     chat_id = callback.message.chat.id
+    # Строим клавиатуру с кнопками: либо из нового поля cta_buttons, либо из старого cta_text (для обратной совместимости)
     kb_cta = None
-    if add_cta and cta_text:
-        kb_cta = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text=cta_text, callback_data="menu_record")]
-            ]
-        )
+    buttons = data.get("cta_buttons")
+    if not buttons:
+        cta_text = (data.get("cta_text") or "").strip() or None
+        if add_cta and cta_text:
+            buttons = [{"type": "internal", "text": cta_text, "callback": "menu_record"}]
+    if add_cta and buttons:
+        row = []
+        for b in buttons:
+            if b.get("type") == "url":
+                row.append(InlineKeyboardButton(text=b.get("text", "Ссылка"), url=b.get("url", "")))
+            else:
+                row.append(
+                    InlineKeyboardButton(
+                        text=b.get("text", "Подробнее"),
+                        callback_data=b.get("callback", "menu_record"),
+                    )
+                )
+        kb_cta = InlineKeyboardMarkup(inline_keyboard=[row])
     html_caption = broadcast_text_to_html(text) if text else None
 
     try:
@@ -991,10 +1371,7 @@ async def admin_broadcast_send(callback: types.CallbackQuery, state: FSMContext)
     text = data.get("broadcast_text", "")
     media_items = data.get("media_items") or []
     media_kind = data.get("media_kind")
-    cta_text = (data.get("cta_text") or "").strip() or None
     add_cta = data.get("add_cta", True)
-    if add_cta and cta_text is None:
-        cta_text = "Записаться на игру"
     if not text and not media_items:
         await callback.answer("Добавьте текст или медиа.", show_alert=True)
         return
@@ -1005,13 +1382,26 @@ async def admin_broadcast_send(callback: types.CallbackQuery, state: FSMContext)
         user_ids = get_users_for_broadcast(filter_type)
     await state.clear()
 
+    # Кнопки CTA для рассылки
     kb_cta = None
-    if add_cta and cta_text:
-        kb_cta = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text=cta_text, callback_data="menu_record")]
-            ]
-        )
+    buttons = data.get("cta_buttons")
+    if not buttons:
+        cta_text = (data.get("cta_text") or "").strip() or None
+        if add_cta and cta_text:
+            buttons = [{"type": "internal", "text": cta_text, "callback": "menu_record"}]
+    if add_cta and buttons:
+        row = []
+        for b in buttons:
+            if b.get("type") == "url":
+                row.append(InlineKeyboardButton(text=b.get("text", "Ссылка"), url=b.get("url", "")))
+            else:
+                row.append(
+                    InlineKeyboardButton(
+                        text=b.get("text", "Подробнее"),
+                        callback_data=b.get("callback", "menu_record"),
+                    )
+                )
+        kb_cta = InlineKeyboardMarkup(inline_keyboard=[row])
     html_caption = broadcast_text_to_html(text) if text else None
     total = len(user_ids)
     await callback.message.edit_text(f"📤 Отправка {total} пользователям...")
@@ -1062,6 +1452,243 @@ async def admin_broadcast_send(callback: types.CallbackQuery, state: FSMContext)
     await callback.answer()
 
 
+# --- Autopipeline / Onboarding funnel ---
+
+
+def _funnel_list_text_and_kb():
+    """Список шагов автоворонки для админки."""
+    steps = get_funnel_steps()
+    if not steps:
+        text = "📬 Автоворонка"
+    else:
+        lines = ["📬 Автоворонка\n"]
+        for row in steps:
+            sid, order_num, delay_hours, text_raw, media_type, media_file_id, is_active = row
+            status = "✅" if is_active else "❌"
+            preview = (text_raw or "").strip()
+            if not preview:
+                if media_type:
+                    preview = f"[{media_type}]"
+                else:
+                    preview = "(пусто)"
+            if len(preview) > 80:
+                preview = preview[:80] + "..."
+            delay_label = "0 (сразу)" if delay_hours == 0 else f"+{delay_hours // 24} д"
+            lines.append(f"{status} Шаг #{sid}: {delay_label}\n{preview}\n")
+        text = "\n".join(lines)
+
+    kb_rows = [
+        [InlineKeyboardButton(text="➕ Добавить шаг", callback_data="admin_funnel_add")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")],
+    ]
+
+    # Для каждого шага добавляем ряд кнопок
+    for row in steps:
+        sid, order_num, delay_hours, text_raw, media_type, media_file_id, is_active = row
+        kb_rows.insert(
+            0,
+            [
+                InlineKeyboardButton(text=f"✏️ Шаг #{sid}", callback_data=f"admin_funnel_edit_{sid}"),
+                InlineKeyboardButton(
+                    text=("❌ Выкл" if is_active else "✅ Вкл"),
+                    callback_data=f"admin_funnel_toggle_{sid}",
+                ),
+                InlineKeyboardButton(text="🗑", callback_data=f"admin_funnel_delete_{sid}"),
+            ],
+        )
+
+    return text, InlineKeyboardMarkup(inline_keyboard=kb_rows)
+
+
+@router.callback_query(F.data == "admin_funnel")
+async def admin_funnel_root(callback: types.CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    text, kb = _funnel_list_text_and_kb()
+    await callback.message.edit_text(text, reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_funnel_add")
+async def admin_funnel_add_start(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    if callback.from_user.id not in ADMIN_IDS:
+        return
+    await state.set_state(AdminFunnelStates.add_delay)
+    await callback.message.answer(
+        "Через сколько дней после первого захода пользователя в бота отправлять этот шаг?\n"
+        "Например: 0 (сразу); 1 (1 д); 2 (2 д); 3 (3 д)... 10 (10 д)."
+    )
+
+
+@router.message(AdminFunnelStates.add_delay, F.text)
+async def admin_funnel_add_delay(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    raw = (message.text or "").strip()
+    try:
+        days = int(raw)
+        if days < 0:
+            raise ValueError
+    except ValueError:
+        await message.answer("Введи целое число дней (0 или больше).")
+        return
+    delay_hours = days * 24
+    await state.update_data(delay_hours=delay_hours)
+    await state.set_state(AdminFunnelStates.add_content)
+    await message.answer("📩 Отправь сообщение для рассылки.")
+
+
+def _extract_funnel_media(message: types.Message):
+    """Вернуть (media_type, file_id, text) из сообщения админа для автоворонки."""
+    text = (message.text or "").strip() if message.text else ""
+    media_type = None
+    file_id = None
+    caption = (message.caption or "").strip() if message.caption else ""
+
+    if message.photo:
+        media_type = "photo"
+        file_id = message.photo[-1].file_id
+        if caption:
+            text = caption
+    elif message.video:
+        media_type = "video"
+        file_id = message.video.file_id
+        if caption:
+            text = caption
+    elif message.document:
+        media_type = "document"
+        file_id = message.document.file_id
+        if caption:
+            text = caption
+
+    return media_type, file_id, text
+
+
+@router.message(AdminFunnelStates.add_content)
+async def admin_funnel_add_content(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    data = await state.get_data()
+    delay_hours = data.get("delay_hours", 0)
+
+    media_type, file_id, text = _extract_funnel_media(message)
+    if not text and not file_id:
+        await message.answer("Нужно добавить либо текст, либо медиа.")
+        return
+
+    add_funnel_step(delay_hours=delay_hours, text=text, media_type=media_type, media_file_id=file_id)
+    await state.clear()
+    await message.answer("✅ Шаг автоворонки добавлен.")
+
+    text_list, kb = _funnel_list_text_and_kb()
+    await message.answer(text_list, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("admin_funnel_delete_"))
+async def admin_funnel_delete(callback: types.CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    sid = int(callback.data.split("_")[-1])
+    delete_funnel_step(sid)
+    text, kb = _funnel_list_text_and_kb()
+    await callback.message.edit_text(text, reply_markup=kb)
+    await callback.answer("Шаг удалён")
+
+
+@router.callback_query(F.data.startswith("admin_funnel_toggle_"))
+async def admin_funnel_toggle(callback: types.CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    sid = int(callback.data.split("_")[-1])
+    # переключаем is_active 1 <-> 0
+    from database import get_funnel_steps as _get_all_steps
+    steps = _get_all_steps()
+    current = next((s for s in steps if s[0] == sid), None)
+    if not current:
+        await callback.answer("Шаг не найден", show_alert=True)
+        return
+    _, order_num, delay_hours, text_raw, media_type, media_file_id, is_active = current
+    update_funnel_step(sid, is_active=0 if is_active else 1)
+    text, kb = _funnel_list_text_and_kb()
+    await callback.message.edit_text(text, reply_markup=kb)
+    await callback.answer("Статус изменён")
+
+
+@router.callback_query(F.data.startswith("admin_funnel_edit_"))
+async def admin_funnel_edit_start(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    sid = int(callback.data.split("_")[-1])
+    steps = get_funnel_steps()
+    current = next((s for s in steps if s[0] == sid), None)
+    if not current:
+        await callback.answer("Шаг не найден", show_alert=True)
+        return
+    _, order_num, delay_hours, text_raw, media_type, media_file_id, is_active = current
+    await state.update_data(funnel_step_id=sid)
+    await state.set_state(AdminFunnelStates.edit_delay)
+    preview = (text_raw or "").strip()
+    if len(preview) > 100:
+        preview = preview[:100] + "..."
+    delay_label = "0 (сразу)" if delay_hours == 0 else f"+{delay_hours // 24} д"
+    await callback.message.answer(
+        f"Редактирование шага #{sid}.\n"
+        f"Сейчас: {delay_label}, активен: {'да' if is_active else 'нет'}.\n\n"
+        f"Текст:\n{preview or '(пусто)'}\n\n"
+        f"Введи новое количество дней (0, 1, 2... 10 и т.д.):"
+    )
+    await callback.answer()
+
+
+@router.message(AdminFunnelStates.edit_delay, F.text)
+async def admin_funnel_edit_delay(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    raw = (message.text or "").strip()
+    try:
+        days = int(raw)
+        if days < 0:
+            raise ValueError
+    except ValueError:
+        await message.answer("Введи целое число дней (0 или больше).")
+        return
+    data = await state.get_data()
+    sid = data.get("funnel_step_id")
+    update_funnel_step(sid, delay_hours=days * 24)
+    await state.set_state(AdminFunnelStates.edit_content)
+    await message.answer(
+        "Теперь отправь новое сообщение для этого шага (текст или медиа с подписью).\n"
+        "Если хочешь оставить текст/медиа как есть — просто продублируй текущее сообщение."
+    )
+
+
+@router.message(AdminFunnelStates.edit_content)
+async def admin_funnel_edit_content(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    data = await state.get_data()
+    sid = data.get("funnel_step_id")
+    media_type, file_id, text = _extract_funnel_media(message)
+    if not text and not file_id:
+        await message.answer("Нужно добавить либо текст, либо медиа.")
+        return
+    update_funnel_step(
+        sid,
+        text=text,
+        media_type=media_type,
+        media_file_id=file_id,
+    )
+    await state.clear()
+    await message.answer("✅ Шаг автоворонки обновлён.")
+    text_list, kb = _funnel_list_text_and_kb()
+    await message.answer(text_list, reply_markup=kb)
+
+
 @router.callback_query(F.data == "admin_back")
 async def admin_back(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
@@ -1076,6 +1703,8 @@ async def admin_back(callback: types.CallbackQuery, state: FSMContext):
             [InlineKeyboardButton(text="📝 Формат", callback_data="admin_format")],
             [InlineKeyboardButton(text="📈 Лиды", callback_data="admin_leads")],
             [InlineKeyboardButton(text="🔄 Follow-up", callback_data="admin_followup")],
+            [InlineKeyboardButton(text="📬 Автоворонка", callback_data="admin_funnel")],
+            [InlineKeyboardButton(text="📅 Отложенные посты", callback_data="admin_scheduled")],
         ]
     )
     await callback.message.edit_text("Админ-панель:", reply_markup=kb)

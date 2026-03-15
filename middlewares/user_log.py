@@ -1,10 +1,18 @@
-"""Логирует каждое действие пользователя (кроме админов) в user_events."""
+"""Логирует каждое действие пользователя (кроме админов) в user_events. В executor, чтобы не блокировать ответ бота."""
+import asyncio
 from typing import Callable, Dict, Any, Awaitable
 from aiogram import BaseMiddleware
 from aiogram.types import Message, CallbackQuery, TelegramObject
 
 from config import ADMIN_IDS
 from database import log_user_event
+
+
+def _log_user_event_sync(tg_id: int, username: str, first_name: str, last_name: str, event_type: str) -> None:
+    try:
+        log_user_event(tg_id, username, first_name, last_name, event_type)
+    except Exception:
+        pass
 
 
 class UserLogMiddleware(BaseMiddleware):
@@ -29,15 +37,16 @@ class UserLogMiddleware(BaseMiddleware):
             event_type = "cb:" + (event.data[:80] if event.data else "?")
 
         if user and user.id not in ADMIN_IDS and event_type:
-            try:
-                log_user_event(
+            loop = asyncio.get_event_loop()
+            loop.run_in_executor(
+                None,
+                lambda: _log_user_event_sync(
                     user.id,
-                    user.username,
-                    user.first_name,
-                    user.last_name,
+                    user.username or "",
+                    user.first_name or "",
+                    user.last_name or "",
                     event_type,
-                )
-            except Exception:
-                pass
+                ),
+            )
 
         return await handler(event, data)

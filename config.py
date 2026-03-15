@@ -16,3 +16,14 @@ CHAT_LINK = os.getenv("CHAT_LINK", "https://t.me/+t67He7tKXcxiNWQy")
 # Канал/чат куда приходят уведомления о заявках и вопросах менеджеру (НЕ общий чат)
 OPERATOR_CHAT_ID = int(os.getenv("OPERATOR_CHAT_ID", "-1003650005079"))
 DATABASE_PATH = BASE_DIR / "data" / "quest_bot.db"
+
+# Ресурсы для отложенного постинга (каналы и чат)
+def _int_or_none(value: str | None):
+    try:
+        return int(value) if value not in (None, "", "0") else None
+    except ValueError:
+        return None
+
+POST_CHANNEL_1 = _int_or_none(os.getenv("POST_CHANNEL_1"))
+POST_CHANNEL_2 = _int_or_none(os.getenv("POST_CHANNEL_2"))
+POST_CHAT_ID = _int_or_none(os.getenv("POST_CHAT_ID"))

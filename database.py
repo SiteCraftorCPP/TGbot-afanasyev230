@@ -103,6 +103,30 @@ def create_tables():
     )
     """)
 
+    # Шаги автоворонки (onboarding flow)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS funnel_steps (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_num INTEGER DEFAULT 0,
+        delay_hours INTEGER NOT NULL,
+        text TEXT,
+        media_type TEXT,
+        media_file_id TEXT,
+        is_active INTEGER DEFAULT 1
+    )
+    """)
+
+    # Лог отправленных шагов автоворонки (чтобы не дублировать сообщения)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS funnel_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tg_id INTEGER NOT NULL,
+        step_id INTEGER NOT NULL,
+        sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(tg_id, step_id)
+    )
+    """)
+
     cur.execute("""
     CREATE TABLE IF NOT EXISTS user_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -173,6 +197,23 @@ def create_tables():
         "UPDATE format_info SET video_url = ? WHERE id = 1 AND (video_url IS NULL OR video_url = '')",
         ("https://www.youtube.com/watch?v=x3Ir917gDiM&list=PLDqVqfBsY9O-fPcm-pK-TpYWfnuJWSBFI",)
     )
+
+    # Отложенные посты (для отложенного постинга в каналы/чат)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS scheduled_posts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        text TEXT,
+        media_type TEXT,
+        media_file_id TEXT,
+        send_to_channel1 INTEGER DEFAULT 0,
+        send_to_channel2 INTEGER DEFAULT 0,
+        send_to_chat INTEGER DEFAULT 0,
+        run_at_utc TEXT NOT NULL,
+        status TEXT DEFAULT 'scheduled',  -- scheduled | sent | cancelled | failed
+        last_error TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
 
     # Исправляем существующие сюжеты: если hidden NULL (старые записи), делаем видимым
     cur.execute("UPDATE stories SET hidden = 0 WHERE hidden IS NULL")
@@ -519,23 +560,44 @@ def get_users_for_export(limit=50000):
 
 
 def get_users_for_broadcast(filter_type: str = "all"):
-    """Список tg_id для рассылки. all | with_lead | without_lead."""
+    """
+    Список tg_id для рассылки.
+
+    filter_type:
+      - "all"         — все, кто когда-либо контактировал с ботом
+                        (subscriptions ∪ user_events ∪ leads ∪ holiday_orders)
+      - "with_lead"   — только пользователи, у которых есть лид/заявка
+      - "without_lead"— все остальные
+    """
     try:
         conn = get_conn()
         cur = conn.cursor()
+
+        # Базовый пул пользователей: все, кого мы хоть где-то знаем.
+        cur.execute("SELECT DISTINCT tg_id FROM subscriptions")
+        subs_ids = {r[0] for r in cur.fetchall()}
+
         cur.execute("SELECT DISTINCT tg_id FROM user_events")
-        all_ids = {r[0] for r in cur.fetchall()}
-        if filter_type == "all":
-            conn.close()
-            return list(all_ids)
+        events_ids = {r[0] for r in cur.fetchall()}
+
         cur.execute("SELECT DISTINCT tg_id FROM leads")
         lead_ids = {r[0] for r in cur.fetchall()}
         cur.execute("SELECT DISTINCT tg_id FROM holiday_orders")
         lead_ids.update(r[0] for r in cur.fetchall())
-        conn.close()
+
+        all_ids = subs_ids | events_ids | lead_ids
+
         if filter_type == "with_lead":
-            return list(all_ids & lead_ids)
-        return list(all_ids - lead_ids)
+            result = all_ids & lead_ids
+        elif filter_type == "without_lead":
+            result = all_ids - lead_ids
+        else:
+            # "all" и любые неизвестные значения фильтра — шлём всем известным.
+            result = all_ids
+
+        conn.close()
+        return list(result)
+
     except sqlite3.OperationalError:
         try:
             conn.close()
@@ -555,6 +617,199 @@ def get_subscriptions(limit=10000):
     rows = cur.fetchall()
     conn.close()
     return rows
+
+
+# --- Scheduled posts (отложенный постинг) ---
+
+def add_scheduled_post(
+    text: str,
+    media_type: str | None,
+    media_file_id: str | None,
+    send_to_channel1: bool,
+    send_to_channel2: bool,
+    send_to_chat: bool,
+    run_at_utc: str,
+):
+    """Создать отложенный пост."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO scheduled_posts
+        (text, media_type, media_file_id,
+         send_to_channel1, send_to_channel2, send_to_chat,
+         run_at_utc, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'scheduled')
+        """,
+        (
+            text or "",
+            media_type,
+            media_file_id,
+            1 if send_to_channel1 else 0,
+            1 if send_to_channel2 else 0,
+            1 if send_to_chat else 0,
+            run_at_utc,
+        ),
+    )
+    pid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return pid
+
+
+def get_scheduled_posts(limit: int = 50):
+    """Список отложенных постов для админки (последние N штук)."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, text, media_type, media_file_id, send_to_channel1,
+               send_to_channel2, send_to_chat, run_at_utc, status, last_error
+        FROM scheduled_posts
+        ORDER BY run_at_utc DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def get_due_scheduled_posts(now_utc: str, limit: int = 50):
+    """Посты, которые пора отправить (run_at_utc <= now_utc, статус scheduled)."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, text, media_type, media_file_id, send_to_channel1,
+               send_to_channel2, send_to_chat
+        FROM scheduled_posts
+        WHERE status = 'scheduled' AND run_at_utc <= ?
+        ORDER BY run_at_utc
+        LIMIT ?
+        """,
+        (now_utc, limit),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def mark_scheduled_post_status(pid: int, status: str, error: str | None = None):
+    """Обновить статус отложенного поста."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE scheduled_posts
+        SET status = ?, last_error = ?
+        WHERE id = ?
+        """,
+        (status, (error or "")[:500], pid),
+    )
+    conn.commit()
+    conn.close()
+
+
+def cancel_scheduled_post(pid: int):
+    """Отменить отложенный пост (status = cancelled)."""
+    mark_scheduled_post_status(pid, "cancelled")
+
+
+# --- Autopipeline (onboarding funnel) ---
+
+def get_funnel_steps():
+    """Все шаги автоворонки (для админки)."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, order_num, delay_hours, text, media_type, media_file_id, is_active "
+        "FROM funnel_steps ORDER BY delay_hours, order_num, id"
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def get_active_funnel_steps():
+    """Активные шаги автоворонки (для планировщика)."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, order_num, delay_hours, text, media_type, media_file_id "
+        "FROM funnel_steps WHERE is_active = 1 ORDER BY delay_hours, order_num, id"
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def add_funnel_step(delay_hours: int, text: str = "", media_type: str | None = None, media_file_id: str | None = None):
+    """Добавить шаг автоворонки."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT COALESCE(MAX(order_num), 0) FROM funnel_steps")
+    max_order = cur.fetchone()[0] or 0
+    order_num = max_order + 1
+    cur.execute(
+        """INSERT INTO funnel_steps (order_num, delay_hours, text, media_type, media_file_id, is_active)
+           VALUES (?, ?, ?, ?, ?, 1)""",
+        (order_num, delay_hours, text or "", media_type or None, media_file_id or None),
+    )
+    sid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return sid
+
+
+def update_funnel_step(step_id: int, **kwargs):
+    """Обновить шаг автоворонки."""
+    if not kwargs:
+        return
+    conn = get_conn()
+    cur = conn.cursor()
+    cols = list(kwargs.keys())
+    vals = list(kwargs.values()) + [step_id]
+    sql = "UPDATE funnel_steps SET " + ", ".join(f"{c}=?" for c in cols) + " WHERE id=?"
+    cur.execute(sql, vals)
+    conn.commit()
+    conn.close()
+
+
+def delete_funnel_step(step_id: int):
+    """Удалить шаг автоворонки (и лог по нему)."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM funnel_log WHERE step_id = ?", (step_id,))
+    cur.execute("DELETE FROM funnel_steps WHERE id = ?", (step_id,))
+    conn.commit()
+    conn.close()
+
+
+def was_funnel_step_sent(tg_id: int, step_id: int) -> bool:
+    """Проверить, был ли уже отправлен пользователю указанный шаг автоворонки."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT 1 FROM funnel_log WHERE tg_id = ? AND step_id = ? LIMIT 1",
+        (tg_id, step_id),
+    )
+    row = cur.fetchone()
+    conn.close()
+    return bool(row)
+
+
+def mark_funnel_step_sent(tg_id: int, step_id: int):
+    """Отметить шаг автоворонки как отправленный пользователю."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT OR IGNORE INTO funnel_log (tg_id, step_id) VALUES (?, ?)",
+        (tg_id, step_id),
+    )
+    conn.commit()
+    conn.close()
 
 
 def get_user_utm(tg_id: int):
