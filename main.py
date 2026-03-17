@@ -14,7 +14,7 @@ from database import (
     add_subscription,
     get_subscriptions,
     get_active_funnel_steps,
-    was_funnel_step_sent,
+    get_funnel_log_sent_set,
     mark_funnel_step_sent,
     get_due_scheduled_posts,
     mark_scheduled_post_status,
@@ -163,10 +163,15 @@ async def cb_menu_back(callback: CallbackQuery, state: FSMContext):
 
 
 def _funnel_build_queue():
-    """Синхронно собирает очередь (tg_id, step_id, text, media_type, media_file_id). В потоке, чтобы не блокировать event loop."""
+    """Синхронно собирает очередь
+
+    Элементы: (tg_id, step_id, text, media_type, media_file_id, button_text, button_url).
+    Один запрос на funnel_log — без блокировки БД.
+    """
     steps = get_active_funnel_steps()
     if not steps:
         return []
+    sent_set = get_funnel_log_sent_set()
     subs = get_subscriptions(limit=100000)
     now = datetime.now(timezone.utc)
     queue = []
@@ -182,12 +187,22 @@ def _funnel_build_queue():
             continue
         delta_hours = (now - started_dt).total_seconds() / 3600.0
         for step in steps:
-            step_id, order_num, delay_hours, text, media_type, media_file_id = step
+            step_id, order_num, delay_hours, text, media_type, media_file_id, button_text, button_url = step
             if delta_hours < float(delay_hours or 0):
                 continue
-            if was_funnel_step_sent(tg_id, step_id):
+            if (tg_id, step_id) in sent_set:
                 continue
-            queue.append((tg_id, step_id, text or "", media_type, media_file_id))
+            queue.append(
+                (
+                    tg_id,
+                    step_id,
+                    text or "",
+                    media_type,
+                    media_file_id,
+                    button_text,
+                    button_url,
+                )
+            )
     return queue
 
 
@@ -200,16 +215,23 @@ async def funnel_worker():
     while True:
         try:
             queue = await loop.run_in_executor(None, _funnel_build_queue)
-            for tg_id, step_id, text, media_type, media_file_id in queue[:FUNNEL_SENDS_PER_CYCLE]:
+            for tg_id, step_id, text, media_type, media_file_id, button_text, button_url in queue[:FUNNEL_SENDS_PER_CYCLE]:
                 try:
+                    reply_markup = None
+                    if button_text and button_url:
+                        reply_markup = InlineKeyboardMarkup(
+                            inline_keyboard=[
+                                [InlineKeyboardButton(text=button_text, url=button_url)]
+                            ]
+                        )
                     if media_type == "photo" and media_file_id:
-                        await bot.send_photo(tg_id, media_file_id, caption=text or None)
+                        await bot.send_photo(tg_id, media_file_id, caption=text or None, reply_markup=reply_markup)
                     elif media_type == "video" and media_file_id:
-                        await bot.send_video(tg_id, media_file_id, caption=text or None)
+                        await bot.send_video(tg_id, media_file_id, caption=text or None, reply_markup=reply_markup)
                     elif media_type == "document" and media_file_id:
-                        await bot.send_document(tg_id, media_file_id, caption=text or None)
+                        await bot.send_document(tg_id, media_file_id, caption=text or None, reply_markup=reply_markup)
                     elif text:
-                        await bot.send_message(tg_id, text)
+                        await bot.send_message(tg_id, text, reply_markup=reply_markup)
                     else:
                         continue
                     mark_funnel_step_sent(tg_id, step_id)

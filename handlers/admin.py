@@ -105,8 +105,10 @@ class AdminBroadcastStates(StatesGroup):
 class AdminFunnelStates(StatesGroup):
     add_delay = State()
     add_content = State()
+    add_button = State()
     edit_delay = State()
     edit_content = State()
+    edit_button = State()
 
 
 class AdminScheduledStates(StatesGroup):
@@ -1463,7 +1465,7 @@ def _funnel_list_text_and_kb():
     else:
         lines = ["📬 Автоворонка\n"]
         for row in steps:
-            sid, order_num, delay_hours, text_raw, media_type, media_file_id, is_active = row
+            sid, order_num, delay_hours, text_raw, media_type, media_file_id, is_active, button_text, button_url = row
             status = "✅" if is_active else "❌"
             preview = (text_raw or "").strip()
             if not preview:
@@ -1473,8 +1475,11 @@ def _funnel_list_text_and_kb():
                     preview = "(пусто)"
             if len(preview) > 80:
                 preview = preview[:80] + "..."
-            delay_label = "0 (сразу)" if delay_hours == 0 else f"+{delay_hours // 24} д"
-            lines.append(f"{status} Шаг #{sid}: {delay_label}\n{preview}\n")
+            delay_label = "0 (сразу)" if delay_hours == 0 else f"+{delay_hours} ч"
+            btn_info = ""
+            if button_text and button_url:
+                btn_info = f"\n🔗 Кнопка: {button_text} → {button_url}"
+            lines.append(f"{status} Шаг #{sid}: {delay_label}\n{preview}{btn_info}\n")
         text = "\n".join(lines)
 
     kb_rows = [
@@ -1517,8 +1522,8 @@ async def admin_funnel_add_start(callback: types.CallbackQuery, state: FSMContex
         return
     await state.set_state(AdminFunnelStates.add_delay)
     await callback.message.answer(
-        "Через сколько дней после первого захода пользователя в бота отправлять этот шаг?\n"
-        "Например: 0 (сразу); 1 (1 д); 2 (2 д); 3 (3 д)... 10 (10 д)."
+        "Через сколько часов после первого захода пользователя в бота отправлять этот шаг?\n"
+        "Например: 0 (сразу); 1 (через 1 ч); 24 (через сутки); 48 (через 2 суток)."
     )
 
 
@@ -1528,14 +1533,13 @@ async def admin_funnel_add_delay(message: types.Message, state: FSMContext):
         return
     raw = (message.text or "").strip()
     try:
-        days = int(raw)
-        if days < 0:
+        hours = int(raw)
+        if hours < 0:
             raise ValueError
     except ValueError:
-        await message.answer("Введи целое число дней (0 или больше).")
+        await message.answer("Введи целое число часов (0 или больше).")
         return
-    delay_hours = days * 24
-    await state.update_data(delay_hours=delay_hours)
+    await state.update_data(delay_hours=hours)
     await state.set_state(AdminFunnelStates.add_content)
     await message.answer("📩 Отправь сообщение для рассылки.")
 
@@ -1578,12 +1582,15 @@ async def admin_funnel_add_content(message: types.Message, state: FSMContext):
         await message.answer("Нужно добавить либо текст, либо медиа.")
         return
 
-    add_funnel_step(delay_hours=delay_hours, text=text, media_type=media_type, media_file_id=file_id)
-    await state.clear()
-    await message.answer("✅ Шаг автоворонки добавлен.")
-
-    text_list, kb = _funnel_list_text_and_kb()
-    await message.answer(text_list, reply_markup=kb)
+    sid = add_funnel_step(delay_hours=delay_hours, text=text, media_type=media_type, media_file_id=file_id)
+    await state.update_data(funnel_step_id=sid)
+    await state.set_state(AdminFunnelStates.add_button)
+    await message.answer(
+        "🔗 Если нужна кнопка под сообщением, отправь в одном сообщении:\n\n"
+        "Текст кнопки | https://ссылка\n\n"
+        "Например: Записаться в чат | https://t.me/your_chat\n\n"
+        "Или отправь «-», чтобы оставить шаг без кнопки.",
+    )
 
 
 @router.callback_query(F.data.startswith("admin_funnel_delete_"))
@@ -1629,18 +1636,18 @@ async def admin_funnel_edit_start(callback: types.CallbackQuery, state: FSMConte
     if not current:
         await callback.answer("Шаг не найден", show_alert=True)
         return
-    _, order_num, delay_hours, text_raw, media_type, media_file_id, is_active = current
+    _, order_num, delay_hours, text_raw, media_type, media_file_id, is_active, button_text, button_url = current
     await state.update_data(funnel_step_id=sid)
     await state.set_state(AdminFunnelStates.edit_delay)
     preview = (text_raw or "").strip()
     if len(preview) > 100:
         preview = preview[:100] + "..."
-    delay_label = "0 (сразу)" if delay_hours == 0 else f"+{delay_hours // 24} д"
+    delay_label = "0 (сразу)" if delay_hours == 0 else f"+{delay_hours} ч"
     await callback.message.answer(
         f"Редактирование шага #{sid}.\n"
         f"Сейчас: {delay_label}, активен: {'да' if is_active else 'нет'}.\n\n"
         f"Текст:\n{preview or '(пусто)'}\n\n"
-        f"Введи новое количество дней (0, 1, 2... 10 и т.д.):"
+        f"Введи новое количество часов (0, 1, 2... 72 и т.д.):"
     )
     await callback.answer()
 
@@ -1651,15 +1658,15 @@ async def admin_funnel_edit_delay(message: types.Message, state: FSMContext):
         return
     raw = (message.text or "").strip()
     try:
-        days = int(raw)
-        if days < 0:
+        hours = int(raw)
+        if hours < 0:
             raise ValueError
     except ValueError:
-        await message.answer("Введи целое число дней (0 или больше).")
+        await message.answer("Введи целое число часов (0 или больше).")
         return
     data = await state.get_data()
     sid = data.get("funnel_step_id")
-    update_funnel_step(sid, delay_hours=days * 24)
+    update_funnel_step(sid, delay_hours=hours)
     await state.set_state(AdminFunnelStates.edit_content)
     await message.answer(
         "Теперь отправь новое сообщение для этого шага (текст или медиа с подписью).\n"
@@ -1683,8 +1690,80 @@ async def admin_funnel_edit_content(message: types.Message, state: FSMContext):
         media_type=media_type,
         media_file_id=file_id,
     )
-    await state.clear()
-    await message.answer("✅ Шаг автоворонки обновлён.")
+    await state.set_state(AdminFunnelStates.edit_button)
+    await message.answer(
+        "✅ Контент шага обновлён.\n\n"
+        "Теперь настрой кнопку.\n"
+        "Если нужна кнопка — отправь:\n"
+        "Текст кнопки | https://ссылка\n\n"
+        "Или отправь «-», чтобы удалить кнопку / оставить без неё.",
+    )
+
+
+@router.message(AdminFunnelStates.add_button, F.text)
+async def admin_funnel_add_button(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    raw = (message.text or "").strip()
+    data = await state.get_data()
+    sid = data.get("funnel_step_id")
+    if not sid:
+        await state.clear()
+        await message.answer("Ошибка: не найден шаг автоворонки.")
+        return
+    if raw in ("", "-"):
+        update_funnel_step(sid, button_text=None, button_url=None)
+        await state.clear()
+        await message.answer("Шаг автоворонки добавлен без кнопки.")
+    else:
+        if "|" not in raw:
+            await message.answer("Формат: Текст кнопки | https://ссылка")
+            return
+        text_part, url_part = [p.strip() for p in raw.split("|", 1)]
+        if not text_part or not url_part:
+            await message.answer("Нужно указать и текст, и ссылку. Формат: Текст | https://ссылка")
+            return
+        if not (url_part.startswith("http://") or url_part.startswith("https://")):
+            await message.answer("Ссылка должна начинаться с http:// или https://")
+            return
+        update_funnel_step(sid, button_text=text_part, button_url=url_part)
+        await state.clear()
+        await message.answer("✅ Шаг автоворонки добавлен с кнопкой.")
+
+    text_list, kb = _funnel_list_text_and_kb()
+    await message.answer(text_list, reply_markup=kb)
+
+
+@router.message(AdminFunnelStates.edit_button, F.text)
+async def admin_funnel_edit_button(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    raw = (message.text or "").strip()
+    data = await state.get_data()
+    sid = data.get("funnel_step_id")
+    if not sid:
+        await state.clear()
+        await message.answer("Ошибка: не найден шаг автоворонки.")
+        return
+    if raw in ("", "-"):
+        update_funnel_step(sid, button_text=None, button_url=None)
+        await state.clear()
+        await message.answer("✅ Кнопка для шага удалена / отключена.")
+    else:
+        if "|" not in raw:
+            await message.answer("Формат: Текст кнопки | https://ссылка")
+            return
+        text_part, url_part = [p.strip() for p in raw.split("|", 1)]
+        if not text_part or not url_part:
+            await message.answer("Нужно указать и текст, и ссылку. Формат: Текст | https://ссылка")
+            return
+        if not (url_part.startswith("http://") or url_part.startswith("https://")):
+            await message.answer("Ссылка должна начинаться с http:// или https://")
+            return
+        update_funnel_step(sid, button_text=text_part, button_url=url_part)
+        await state.clear()
+        await message.answer("✅ Кнопка для шага обновлена.")
+
     text_list, kb = _funnel_list_text_and_kb()
     await message.answer(text_list, reply_markup=kb)
 

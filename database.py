@@ -8,7 +8,10 @@ Path(DATABASE_PATH).parent.mkdir(parents=True, exist_ok=True)
 
 
 def get_conn():
-    return sqlite3.connect(DATABASE_PATH)
+    conn = sqlite3.connect(DATABASE_PATH, timeout=15.0)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=10000")
+    return conn
 
 
 def create_tables():
@@ -112,9 +115,20 @@ def create_tables():
         text TEXT,
         media_type TEXT,
         media_file_id TEXT,
-        is_active INTEGER DEFAULT 1
+        is_active INTEGER DEFAULT 1,
+        button_text TEXT,
+        button_url TEXT
     )
     """)
+    # Миграции для уже существующей таблицы (старые БД без колонок кнопки)
+    try:
+        cur.execute("ALTER TABLE funnel_steps ADD COLUMN button_text TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cur.execute("ALTER TABLE funnel_steps ADD COLUMN button_url TEXT")
+    except sqlite3.OperationalError:
+        pass
 
     # Лог отправленных шагов автоворонки (чтобы не дублировать сообщения)
     cur.execute("""
@@ -724,7 +738,7 @@ def get_funnel_steps():
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        "SELECT id, order_num, delay_hours, text, media_type, media_file_id, is_active "
+        "SELECT id, order_num, delay_hours, text, media_type, media_file_id, is_active, button_text, button_url "
         "FROM funnel_steps ORDER BY delay_hours, order_num, id"
     )
     rows = cur.fetchall()
@@ -737,7 +751,7 @@ def get_active_funnel_steps():
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        "SELECT id, order_num, delay_hours, text, media_type, media_file_id "
+        "SELECT id, order_num, delay_hours, text, media_type, media_file_id, button_text, button_url "
         "FROM funnel_steps WHERE is_active = 1 ORDER BY delay_hours, order_num, id"
     )
     rows = cur.fetchall()
@@ -745,7 +759,14 @@ def get_active_funnel_steps():
     return rows
 
 
-def add_funnel_step(delay_hours: int, text: str = "", media_type: str | None = None, media_file_id: str | None = None):
+def add_funnel_step(
+    delay_hours: int,
+    text: str = "",
+    media_type: str | None = None,
+    media_file_id: str | None = None,
+    button_text: str | None = None,
+    button_url: str | None = None,
+):
     """Добавить шаг автоворонки."""
     conn = get_conn()
     cur = conn.cursor()
@@ -753,9 +774,20 @@ def add_funnel_step(delay_hours: int, text: str = "", media_type: str | None = N
     max_order = cur.fetchone()[0] or 0
     order_num = max_order + 1
     cur.execute(
-        """INSERT INTO funnel_steps (order_num, delay_hours, text, media_type, media_file_id, is_active)
-           VALUES (?, ?, ?, ?, ?, 1)""",
-        (order_num, delay_hours, text or "", media_type or None, media_file_id or None),
+        """INSERT INTO funnel_steps (
+               order_num, delay_hours, text, media_type, media_file_id,
+               is_active, button_text, button_url
+           )
+           VALUES (?, ?, ?, ?, ?, 1, ?, ?)""",
+        (
+            order_num,
+            delay_hours,
+            text or "",
+            media_type or None,
+            media_file_id or None,
+            (button_text or None),
+            (button_url or None),
+        ),
     )
     sid = cur.lastrowid
     conn.commit()
@@ -798,6 +830,16 @@ def was_funnel_step_sent(tg_id: int, step_id: int) -> bool:
     row = cur.fetchone()
     conn.close()
     return bool(row)
+
+
+def get_funnel_log_sent_set():
+    """Все пары (tg_id, step_id), уже отправленные. Один запрос — чтобы не блокировать БД в цикле."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT tg_id, step_id FROM funnel_log")
+    rows = cur.fetchall()
+    conn.close()
+    return {(r[0], r[1]) for r in rows}
 
 
 def mark_funnel_step_sent(tg_id: int, step_id: int):
