@@ -743,8 +743,12 @@ def mark_scheduled_post_status(pid: int, status: str, error: str | None = None):
 
 
 def cancel_scheduled_post(pid: int):
-    """Отменить отложенный пост (status = cancelled)."""
-    mark_scheduled_post_status(pid, "cancelled")
+    """Удалить отложенный пост полностью."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM scheduled_posts WHERE id = ?", (pid,))
+    conn.commit()
+    conn.close()
 
 
 # --- Autopipeline (onboarding funnel) ---

@@ -574,7 +574,7 @@ def _scheduled_list_text_and_kb():
         text = "📅 Отложенные посты\n\nПока нет запланированных постов."
     else:
         lines = ["📅 Отложенные посты:\n"]
-        for pid, txt, media_type, media_file_id, to_ch1, to_ch2, to_chat, run_at_utc, status, last_error, btn_text, btn_url in rows:
+        for idx, (pid, txt, media_type, media_file_id, to_ch1, to_ch2, to_chat, run_at_utc, status, last_error, btn_text, btn_url) in enumerate(rows, start=1):
             try:
                 dt_utc = datetime.fromisoformat(str(run_at_utc))
                 if dt_utc.tzinfo is None:
@@ -585,9 +585,9 @@ def _scheduled_list_text_and_kb():
                 ts = str(run_at_utc)
             targets = []
             if to_ch1:
-                targets.append("Канал 1")
+                targets.append("Канал СПБ")
             if to_ch2:
-                targets.append("Канал 2")
+                targets.append("Канал ЕКБ")
             if to_chat:
                 targets.append("Чат")
             targets_str = ", ".join(targets) if targets else "—"
@@ -599,18 +599,18 @@ def _scheduled_list_text_and_kb():
             btn_info = ""
             if btn_text and btn_url:
                 btn_info = f"\n🔗 Кнопка: {btn_text} → {btn_url}"
-            lines.append(f"#{pid} [{status}] {ts} → {targets_str}\n{preview}{btn_info}\n")
+            lines.append(f"Пост #{idx}: {ts} → {targets_str}\n{preview}{btn_info}\n")
         text = "\n".join(lines)
 
     kb_rows = [
         [InlineKeyboardButton(text="➕ Новый пост", callback_data="admin_scheduled_new")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")],
     ]
-    # Кнопки отмены для каждого поста
-    for pid, *_ in rows:
+    # Кнопки удаления для каждого поста (по фактическому номеру в списке)
+    for idx, (pid, *_rest) in enumerate(rows, start=1):
         kb_rows.insert(
             0,
-            [InlineKeyboardButton(text=f"🗑 Отменить #{pid}", callback_data=f"admin_scheduled_cancel_{pid}")],
+            [InlineKeyboardButton(text=f"🗑 Удалить #{idx}", callback_data=f"admin_scheduled_cancel_{pid}")],
         )
 
     return text, InlineKeyboardMarkup(inline_keyboard=kb_rows)
@@ -747,18 +747,18 @@ async def _admin_scheduled_show_targets(msg_target, state: FSMContext):
 
     lines = ["📍 Куда отправлять пост:\n"]
     if POST_CHANNEL_1:
-        lines.append(f"{'✅' if to_ch1 else '❌'} Канал 1")
+        lines.append(f"{'✅' if to_ch1 else '❌'} Канал СПБ")
     if POST_CHANNEL_2:
-        lines.append(f"{'✅' if to_ch2 else '❌'} Канал 2")
+        lines.append(f"{'✅' if to_ch2 else '❌'} Канал ЕКБ")
     if POST_CHAT_ID:
         lines.append(f"{'✅' if to_chat else '❌'} Чат")
     text = "\n".join(lines)
 
     kb_rows = []
     if POST_CHANNEL_1:
-        kb_rows.append([InlineKeyboardButton(text="Канал 1", callback_data="admin_scheduled_toggle_ch1")])
+        kb_rows.append([InlineKeyboardButton(text="Канал СПБ", callback_data="admin_scheduled_toggle_ch1")])
     if POST_CHANNEL_2:
-        kb_rows.append([InlineKeyboardButton(text="Канал 2", callback_data="admin_scheduled_toggle_ch2")])
+        kb_rows.append([InlineKeyboardButton(text="Канал ЕКБ", callback_data="admin_scheduled_toggle_ch2")])
     if POST_CHAT_ID:
         kb_rows.append([InlineKeyboardButton(text="Чат", callback_data="admin_scheduled_toggle_chat")])
     kb_rows.append([InlineKeyboardButton(text="✅ Создать пост", callback_data="admin_scheduled_create")])
