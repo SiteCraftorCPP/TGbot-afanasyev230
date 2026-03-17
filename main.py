@@ -20,7 +20,7 @@ from database import (
     mark_scheduled_post_status,
 )
 from middlewares.user_log import UserLogMiddleware
-from keyboards import MENU_KB, MENU_TEXT
+from keyboards import MENU_KB, MENU_TEXT, get_main_reply_kb
 from handlers.main import router as main_router
 from handlers.recording import router as recording_router, start_record as recording_start
 from handlers.format_funnel import router as format_router, format_show_screen
@@ -323,7 +323,24 @@ async def cmd_start(message: Message):
             utm["utm_campaign"] = parts[2]
     if utm:
         save_user_utm(user.id, **utm)
+    # Ставим reply-клавиатуру (над полем ввода), затем отправляем inline-меню
+    await message.answer("Кнопки:", reply_markup=get_main_reply_kb(user.id))
     await message.answer(MENU_TEXT, reply_markup=MENU_KB)
+
+
+@dp.message(F.text == "Старт")
+async def btn_start(message: Message):
+    # Быстрый возврат в главное меню без /start
+    await message.answer(MENU_TEXT, reply_markup=MENU_KB)
+
+
+@dp.message(F.text == "Админ")
+async def btn_admin(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    # Открываем админку без /admin
+    from handlers.admin import cmd_admin as _cmd_admin
+    await _cmd_admin(message)
 
 
 async def main():
