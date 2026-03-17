@@ -118,6 +118,8 @@ class AdminScheduledStates(StatesGroup):
     media = State()
     datetime = State()
     targets = State()
+    button_text = State()
+    button_url = State()
 
 
 
@@ -572,7 +574,7 @@ def _scheduled_list_text_and_kb():
         text = "📅 Отложенные посты\n\nПока нет запланированных постов."
     else:
         lines = ["📅 Отложенные посты:\n"]
-        for pid, txt, media_type, media_file_id, to_ch1, to_ch2, to_chat, run_at_utc, status, last_error in rows:
+        for pid, txt, media_type, media_file_id, to_ch1, to_ch2, to_chat, run_at_utc, status, last_error, btn_text, btn_url in rows:
             try:
                 dt_utc = datetime.fromisoformat(str(run_at_utc))
                 if dt_utc.tzinfo is None:
@@ -594,7 +596,10 @@ def _scheduled_list_text_and_kb():
                 preview = f"[{media_type}]"
             if len(preview) > 60:
                 preview = preview[:60] + "..."
-            lines.append(f"#{pid} [{status}] {ts} → {targets_str}\n{preview}\n")
+            btn_info = ""
+            if btn_text and btn_url:
+                btn_info = f"\n🔗 Кнопка: {btn_text} → {btn_url}"
+            lines.append(f"#{pid} [{status}] {ts} → {targets_str}\n{preview}{btn_info}\n")
         text = "\n".join(lines)
 
     kb_rows = [
@@ -809,6 +814,73 @@ async def admin_scheduled_create(callback: types.CallbackQuery, state: FSMContex
     if not run_at_utc:
         await callback.answer("Не задано время публикации", show_alert=True)
         return
+
+    # перед созданием поста спросим кнопку
+    await state.set_state(AdminScheduledStates.button_text)
+    await callback.answer()
+    await callback.message.answer(
+        "🔗 Отправьте текст для кнопки под постом.\n\n"
+        "Или отправьте «-», чтобы создать пост без кнопки.",
+    )
+
+
+@router.message(AdminScheduledStates.button_text, F.text)
+async def admin_scheduled_button_text(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    raw = (message.text or "").strip()
+    data = await state.get_data()
+    if raw in ("", "-"):
+        # создаём пост без кнопки
+        text = data.get("sched_text") or ""
+        media_type = data.get("sched_media_type")
+        media_file_id = data.get("sched_media_file_id")
+        run_at_utc = data.get("sched_run_at_utc")
+        to_ch1 = bool(data.get("sched_to_ch1"))
+        to_ch2 = bool(data.get("sched_to_ch2"))
+        to_chat = bool(data.get("sched_to_chat"))
+        add_scheduled_post(
+            text=text,
+            media_type=media_type,
+            media_file_id=media_file_id,
+            send_to_channel1=to_ch1,
+            send_to_channel2=to_ch2,
+            send_to_chat=to_chat,
+            run_at_utc=run_at_utc,
+            button_text=None,
+            button_url=None,
+        )
+        await state.clear()
+        await message.answer("Пост запланирован.")
+        text_list, kb = _scheduled_list_text_and_kb()
+        await message.answer(text_list, reply_markup=kb)
+        return
+
+    await state.update_data(sched_button_text=raw)
+    await state.set_state(AdminScheduledStates.button_url)
+    await message.answer("🌐 Теперь отправьте ссылку для кнопки:")
+
+
+@router.message(AdminScheduledStates.button_url, F.text)
+async def admin_scheduled_button_url(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    url = (message.text or "").strip()
+    data = await state.get_data()
+    btn_text = (data.get("sched_button_text") or "").strip()
+    if not btn_text:
+        await state.clear()
+        await message.answer("Ошибка: не найден текст кнопки.")
+        return
+
+    text = data.get("sched_text") or ""
+    media_type = data.get("sched_media_type")
+    media_file_id = data.get("sched_media_file_id")
+    run_at_utc = data.get("sched_run_at_utc")
+    to_ch1 = bool(data.get("sched_to_ch1"))
+    to_ch2 = bool(data.get("sched_to_ch2"))
+    to_chat = bool(data.get("sched_to_chat"))
+
     add_scheduled_post(
         text=text,
         media_type=media_type,
@@ -817,11 +889,13 @@ async def admin_scheduled_create(callback: types.CallbackQuery, state: FSMContex
         send_to_channel2=to_ch2,
         send_to_chat=to_chat,
         run_at_utc=run_at_utc,
+        button_text=btn_text,
+        button_url=url,
     )
     await state.clear()
-    await callback.answer("Пост запланирован")
-    text, kb = _scheduled_list_text_and_kb()
-    await callback.message.edit_text(text, reply_markup=kb)
+    await message.answer("Пост запланирован с кнопкой.")
+    text_list, kb = _scheduled_list_text_and_kb()
+    await message.answer(text_list, reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("admin_scheduled_cancel_"))

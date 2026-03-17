@@ -251,7 +251,7 @@ async def scheduled_posts_worker():
         try:
             now_utc = datetime.now(timezone.utc).isoformat(timespec="seconds")
             posts = get_due_scheduled_posts(now_utc, limit=50)
-            for pid, text, media_type, media_file_id, to_ch1, to_ch2, to_chat in posts:
+            for pid, text, media_type, media_file_id, to_ch1, to_ch2, to_chat, button_text, button_url in posts:
                 targets = []
                 if to_ch1 and POST_CHANNEL_1 is not None:
                     targets.append(POST_CHANNEL_1)
@@ -266,14 +266,21 @@ async def scheduled_posts_worker():
                 err = ""
                 for chat_id in targets:
                     try:
+                        reply_markup = None
+                        if button_text and button_url:
+                            reply_markup = InlineKeyboardMarkup(
+                                inline_keyboard=[
+                                    [InlineKeyboardButton(text=button_text, url=button_url)]
+                                ]
+                            )
                         if media_type == "photo" and media_file_id:
-                            await bot.send_photo(chat_id, media_file_id, caption=text or None)
+                            await bot.send_photo(chat_id, media_file_id, caption=text or None, reply_markup=reply_markup)
                         elif media_type == "video" and media_file_id:
-                            await bot.send_video(chat_id, media_file_id, caption=text or None)
+                            await bot.send_video(chat_id, media_file_id, caption=text or None, reply_markup=reply_markup)
                         elif media_type == "document" and media_file_id:
-                            await bot.send_document(chat_id, media_file_id, caption=text or None)
+                            await bot.send_document(chat_id, media_file_id, caption=text or None, reply_markup=reply_markup)
                         else:
-                            await bot.send_message(chat_id, text or "")
+                            await bot.send_message(chat_id, text or "", reply_markup=reply_markup)
                         await asyncio.sleep(0.1)
                     except Exception as e:
                         ok = False

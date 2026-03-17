@@ -225,9 +225,20 @@ def create_tables():
         run_at_utc TEXT NOT NULL,
         status TEXT DEFAULT 'scheduled',  -- scheduled | sent | cancelled | failed
         last_error TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        button_text TEXT,
+        button_url TEXT
     )
     """)
+    # Миграции для уже существующей таблицы отложенных постов
+    try:
+        cur.execute("ALTER TABLE scheduled_posts ADD COLUMN button_text TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cur.execute("ALTER TABLE scheduled_posts ADD COLUMN button_url TEXT")
+    except sqlite3.OperationalError:
+        pass
 
     # Исправляем существующие сюжеты: если hidden NULL (старые записи), делаем видимым
     cur.execute("UPDATE stories SET hidden = 0 WHERE hidden IS NULL")
@@ -643,6 +654,8 @@ def add_scheduled_post(
     send_to_channel2: bool,
     send_to_chat: bool,
     run_at_utc: str,
+    button_text: str | None = None,
+    button_url: str | None = None,
 ):
     """Создать отложенный пост."""
     conn = get_conn()
@@ -651,9 +664,9 @@ def add_scheduled_post(
         """
         INSERT INTO scheduled_posts
         (text, media_type, media_file_id,
-         send_to_channel1, send_to_channel2, send_to_chat,
-         run_at_utc, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'scheduled')
+        send_to_channel1, send_to_channel2, send_to_chat,
+        run_at_utc, status, button_text, button_url)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?)
         """,
         (
             text or "",
@@ -663,6 +676,8 @@ def add_scheduled_post(
             1 if send_to_channel2 else 0,
             1 if send_to_chat else 0,
             run_at_utc,
+            button_text or None,
+            button_url or None,
         ),
     )
     pid = cur.lastrowid
@@ -678,7 +693,8 @@ def get_scheduled_posts(limit: int = 50):
     cur.execute(
         """
         SELECT id, text, media_type, media_file_id, send_to_channel1,
-               send_to_channel2, send_to_chat, run_at_utc, status, last_error
+               send_to_channel2, send_to_chat, run_at_utc, status, last_error,
+               button_text, button_url
         FROM scheduled_posts
         ORDER BY run_at_utc DESC
         LIMIT ?
@@ -697,7 +713,7 @@ def get_due_scheduled_posts(now_utc: str, limit: int = 50):
     cur.execute(
         """
         SELECT id, text, media_type, media_file_id, send_to_channel1,
-               send_to_channel2, send_to_chat
+               send_to_channel2, send_to_chat, button_text, button_url
         FROM scheduled_posts
         WHERE status = 'scheduled' AND run_at_utc <= ?
         ORDER BY run_at_utc
