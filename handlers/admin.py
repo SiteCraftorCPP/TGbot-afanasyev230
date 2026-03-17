@@ -1491,7 +1491,8 @@ def _funnel_list_text_and_kb():
 
     # Для каждого шага добавляем ряд кнопок
     for row in steps:
-        sid, order_num, delay_hours, text_raw, media_type, media_file_id, is_active = row
+        sid = row[0]
+        is_active = row[6]
         kb_rows.insert(
             0,
             [
