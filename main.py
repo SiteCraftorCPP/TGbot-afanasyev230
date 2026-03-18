@@ -4,9 +4,11 @@ from datetime import datetime, timezone
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
+from aiogram.client.session.aiohttp import AiohttpSession
 
-from config import BOT_TOKEN, ADMIN_IDS, CHAT_LINK, POST_CHANNEL_1, POST_CHANNEL_2, POST_CHAT_ID
+from config import BOT_TOKEN, ADMIN_IDS, CHAT_LINK, POST_CHANNEL_1, POST_CHANNEL_2, POST_CHAT_ID, TELEGRAM_PROXY
 from database import (
     get_game,
     create_tables,
@@ -18,9 +20,11 @@ from database import (
     mark_funnel_step_sent,
     get_due_scheduled_posts,
     mark_scheduled_post_status,
+    get_users_for_broadcast,
 )
 from middlewares.user_log import UserLogMiddleware
 from keyboards import MENU_KB, MENU_TEXT, get_main_reply_kb
+from utils import text_to_telegram_html
 from handlers.main import router as main_router
 from handlers.recording import router as recording_router, start_record as recording_start
 from handlers.format_funnel import router as format_router, format_show_screen
@@ -30,7 +34,8 @@ from handlers.admin import router as admin_router
 from handlers.stories import router as stories_router
 from handlers.holiday_quest import router as holiday_router
 
-bot = Bot(token=BOT_TOKEN)
+session = AiohttpSession(proxy=TELEGRAM_PROXY) if TELEGRAM_PROXY else None
+bot = Bot(token=BOT_TOKEN, session=session)
 dp = Dispatcher()
 dp.message.middleware(UserLogMiddleware())
 dp.callback_query.middleware(UserLogMiddleware())
@@ -42,6 +47,18 @@ async def safe_answer_callback(callback: CallbackQuery):
         await callback.answer()
     except Exception:
         pass  # Игнорируем ошибки для старых/невалидных callback'ов
+
+
+def _is_html_parse_error(e: Exception) -> bool:
+    if not isinstance(e, TelegramBadRequest):
+        return False
+    msg = str(e).lower()
+    return (
+        "can't parse entities" in msg
+        or "cant parse entities" in msg
+        or "unsupported start tag" in msg
+        or "wrong tag" in msg
+    )
 
 
 @dp.callback_query(F.data == "menu_record")
@@ -224,14 +241,78 @@ async def funnel_worker():
                                 [InlineKeyboardButton(text=button_text, url=button_url)]
                             ]
                         )
+                    html_text = text_to_telegram_html(text) if text else None
+                    parse_mode = "HTML" if html_text else None
                     if media_type == "photo" and media_file_id:
-                        await bot.send_photo(tg_id, media_file_id, caption=text or None, reply_markup=reply_markup)
+                        try:
+                            await bot.send_photo(
+                                tg_id,
+                                media_file_id,
+                                caption=html_text or None,
+                                parse_mode=parse_mode,
+                                reply_markup=reply_markup,
+                            )
+                        except Exception as e:
+                            if _is_html_parse_error(e):
+                                await bot.send_photo(
+                                    tg_id,
+                                    media_file_id,
+                                    caption=(text or None),
+                                    reply_markup=reply_markup,
+                                )
+                            else:
+                                raise
                     elif media_type == "video" and media_file_id:
-                        await bot.send_video(tg_id, media_file_id, caption=text or None, reply_markup=reply_markup)
+                        try:
+                            await bot.send_video(
+                                tg_id,
+                                media_file_id,
+                                caption=html_text or None,
+                                parse_mode=parse_mode,
+                                reply_markup=reply_markup,
+                            )
+                        except Exception as e:
+                            if _is_html_parse_error(e):
+                                await bot.send_video(
+                                    tg_id,
+                                    media_file_id,
+                                    caption=(text or None),
+                                    reply_markup=reply_markup,
+                                )
+                            else:
+                                raise
                     elif media_type == "document" and media_file_id:
-                        await bot.send_document(tg_id, media_file_id, caption=text or None, reply_markup=reply_markup)
-                    elif text:
-                        await bot.send_message(tg_id, text, reply_markup=reply_markup)
+                        try:
+                            await bot.send_document(
+                                tg_id,
+                                media_file_id,
+                                caption=html_text or None,
+                                parse_mode=parse_mode,
+                                reply_markup=reply_markup,
+                            )
+                        except Exception as e:
+                            if _is_html_parse_error(e):
+                                await bot.send_document(
+                                    tg_id,
+                                    media_file_id,
+                                    caption=(text or None),
+                                    reply_markup=reply_markup,
+                                )
+                            else:
+                                raise
+                    elif html_text:
+                        try:
+                            await bot.send_message(
+                                tg_id,
+                                html_text,
+                                parse_mode=parse_mode,
+                                reply_markup=reply_markup,
+                            )
+                        except Exception as e:
+                            if _is_html_parse_error(e):
+                                await bot.send_message(tg_id, text, reply_markup=reply_markup)
+                            else:
+                                raise
                     else:
                         continue
                     mark_funnel_step_sent(tg_id, step_id)
@@ -251,7 +332,7 @@ async def scheduled_posts_worker():
         try:
             now_utc = datetime.now(timezone.utc).isoformat(timespec="seconds")
             posts = get_due_scheduled_posts(now_utc, limit=50)
-            for pid, text, media_type, media_file_id, to_ch1, to_ch2, to_chat, button_text, button_url in posts:
+            for pid, text, media_type, media_file_id, to_ch1, to_ch2, to_chat, to_admins, button_text, button_url in posts:
                 targets = []
                 if to_ch1 and POST_CHANNEL_1 is not None:
                     targets.append(POST_CHANNEL_1)
@@ -259,11 +340,19 @@ async def scheduled_posts_worker():
                     targets.append(POST_CHANNEL_2)
                 if to_chat and POST_CHAT_ID is not None:
                     targets.append(POST_CHAT_ID)
+                if to_admins:
+                    # всем пользователям бота (как в рассылке, фильтр all)
+                    user_ids = get_users_for_broadcast("all")
+                    targets.extend(user_ids)
+                # на всякий случай дедуп
+                targets = list(dict.fromkeys(targets))
                 if not targets:
                     mark_scheduled_post_status(pid, "failed", "Нет целевых чатов/каналов для отправки")
                     continue
                 ok = True
                 err = ""
+                html_text = text_to_telegram_html(text) if text else None
+                parse_mode = "HTML" if html_text else None
                 for chat_id in targets:
                     try:
                         reply_markup = None
@@ -274,13 +363,75 @@ async def scheduled_posts_worker():
                                 ]
                             )
                         if media_type == "photo" and media_file_id:
-                            await bot.send_photo(chat_id, media_file_id, caption=text or None, reply_markup=reply_markup)
+                            try:
+                                await bot.send_photo(
+                                    chat_id,
+                                    media_file_id,
+                                    caption=html_text or None,
+                                    parse_mode=parse_mode,
+                                    reply_markup=reply_markup,
+                                )
+                            except Exception as e:
+                                if _is_html_parse_error(e):
+                                    await bot.send_photo(
+                                        chat_id,
+                                        media_file_id,
+                                        caption=(text or None),
+                                        reply_markup=reply_markup,
+                                    )
+                                else:
+                                    raise
                         elif media_type == "video" and media_file_id:
-                            await bot.send_video(chat_id, media_file_id, caption=text or None, reply_markup=reply_markup)
+                            try:
+                                await bot.send_video(
+                                    chat_id,
+                                    media_file_id,
+                                    caption=html_text or None,
+                                    parse_mode=parse_mode,
+                                    reply_markup=reply_markup,
+                                )
+                            except Exception as e:
+                                if _is_html_parse_error(e):
+                                    await bot.send_video(
+                                        chat_id,
+                                        media_file_id,
+                                        caption=(text or None),
+                                        reply_markup=reply_markup,
+                                    )
+                                else:
+                                    raise
                         elif media_type == "document" and media_file_id:
-                            await bot.send_document(chat_id, media_file_id, caption=text or None, reply_markup=reply_markup)
+                            try:
+                                await bot.send_document(
+                                    chat_id,
+                                    media_file_id,
+                                    caption=html_text or None,
+                                    parse_mode=parse_mode,
+                                    reply_markup=reply_markup,
+                                )
+                            except Exception as e:
+                                if _is_html_parse_error(e):
+                                    await bot.send_document(
+                                        chat_id,
+                                        media_file_id,
+                                        caption=(text or None),
+                                        reply_markup=reply_markup,
+                                    )
+                                else:
+                                    raise
                         else:
-                            await bot.send_message(chat_id, text or "", reply_markup=reply_markup)
+                            try:
+                                await bot.send_message(
+                                    chat_id,
+                                    html_text or "",
+                                    parse_mode=parse_mode,
+                                    reply_markup=reply_markup,
+                                )
+                            except Exception as e:
+                                if _is_html_parse_error(e):
+                                    await bot.send_message(chat_id, text or "", reply_markup=reply_markup)
+                                else:
+                                    raise
                         await asyncio.sleep(0.1)
                     except Exception as e:
                         ok = False

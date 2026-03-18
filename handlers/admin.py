@@ -574,7 +574,7 @@ def _scheduled_list_text_and_kb():
         text = "📅 Отложенные посты\n\nПока нет запланированных постов."
     else:
         lines = ["📅 Отложенные посты:\n"]
-        for idx, (pid, txt, media_type, media_file_id, to_ch1, to_ch2, to_chat, run_at_utc, status, last_error, btn_text, btn_url) in enumerate(rows, start=1):
+        for idx, (pid, txt, media_type, media_file_id, to_ch1, to_ch2, to_chat, to_admins, run_at_utc, status, last_error, btn_text, btn_url) in enumerate(rows, start=1):
             try:
                 dt_utc = datetime.fromisoformat(str(run_at_utc))
                 if dt_utc.tzinfo is None:
@@ -590,6 +590,8 @@ def _scheduled_list_text_and_kb():
                 targets.append("Канал ЕКБ")
             if to_chat:
                 targets.append("Чат")
+            if to_admins:
+                targets.append("Пользователям бота")
             targets_str = ", ".join(targets) if targets else "—"
             preview = (txt or "").strip()
             if not preview and media_type:
@@ -640,6 +642,7 @@ async def admin_scheduled_new(callback: types.CallbackQuery, state: FSMContext):
         sched_to_ch1=bool(POST_CHANNEL_1),
         sched_to_ch2=bool(POST_CHANNEL_2),
         sched_to_chat=bool(POST_CHAT_ID),
+        sched_to_admins=True,
     )
     await callback.message.answer(
         "✏️ Текст отложенного поста.\n\n"
@@ -689,9 +692,12 @@ async def admin_scheduled_media_photo(message: types.Message, state: FSMContext)
         return
     file_id = message.photo[-1].file_id
     await _save_scheduled_media(message, state, "photo", file_id)
-    await admin_scheduled_skip_media(
-        types.CallbackQuery(id="0", from_user=message.from_user, message=message, chat_instance="", data=""),
-        state,
+    # Не создаём фиктивный CallbackQuery: `callback.answer()` требует mounted bot instance.
+    await state.set_state(AdminScheduledStates.datetime)
+    await message.answer(
+        "⏰ Время публикации по МСК.\n\n"
+        "Формат: ДД.ММ.ГГГГ ЧЧ:ММ\n"
+        "Например: 25.03.2026 19:30",
     )
 
 
@@ -701,9 +707,12 @@ async def admin_scheduled_media_video(message: types.Message, state: FSMContext)
         return
     file_id = message.video.file_id
     await _save_scheduled_media(message, state, "video", file_id)
-    await admin_scheduled_skip_media(
-        types.CallbackQuery(id="0", from_user=message.from_user, message=message, chat_instance="", data=""),
-        state,
+    # Не создаём фиктивный CallbackQuery: `callback.answer()` требует mounted bot instance.
+    await state.set_state(AdminScheduledStates.datetime)
+    await message.answer(
+        "⏰ Время публикации по МСК.\n\n"
+        "Формат: ДД.ММ.ГГГГ ЧЧ:ММ\n"
+        "Например: 25.03.2026 19:30",
     )
 
 
@@ -713,9 +722,12 @@ async def admin_scheduled_media_document(message: types.Message, state: FSMConte
         return
     file_id = message.document.file_id
     await _save_scheduled_media(message, state, "document", file_id)
-    await admin_scheduled_skip_media(
-        types.CallbackQuery(id="0", from_user=message.from_user, message=message, chat_instance="", data=""),
-        state,
+    # Не создаём фиктивный CallbackQuery: `callback.answer()` требует mounted bot instance.
+    await state.set_state(AdminScheduledStates.datetime)
+    await message.answer(
+        "⏰ Время публикации по МСК.\n\n"
+        "Формат: ДД.ММ.ГГГГ ЧЧ:ММ\n"
+        "Например: 25.03.2026 19:30",
     )
 
 
@@ -744,6 +756,7 @@ async def _admin_scheduled_show_targets(msg_target, state: FSMContext):
     to_ch1 = bool(data.get("sched_to_ch1"))
     to_ch2 = bool(data.get("sched_to_ch2"))
     to_chat = bool(data.get("sched_to_chat"))
+    to_admins = bool(data.get("sched_to_admins"))
 
     lines = ["📍 Куда отправлять пост:\n"]
     if POST_CHANNEL_1:
@@ -752,6 +765,7 @@ async def _admin_scheduled_show_targets(msg_target, state: FSMContext):
         lines.append(f"{'✅' if to_ch2 else '❌'} Канал ЕКБ")
     if POST_CHAT_ID:
         lines.append(f"{'✅' if to_chat else '❌'} Чат")
+    lines.append(f"{'✅' if to_admins else '❌'} Пользователям бота (ЛС)")
     text = "\n".join(lines)
 
     kb_rows = []
@@ -761,6 +775,7 @@ async def _admin_scheduled_show_targets(msg_target, state: FSMContext):
         kb_rows.append([InlineKeyboardButton(text="Канал ЕКБ", callback_data="admin_scheduled_toggle_ch2")])
     if POST_CHAT_ID:
         kb_rows.append([InlineKeyboardButton(text="Чат", callback_data="admin_scheduled_toggle_chat")])
+    kb_rows.append([InlineKeyboardButton(text="Пользователям бота", callback_data="admin_scheduled_toggle_admins")])
     kb_rows.append([InlineKeyboardButton(text="✅ Создать пост", callback_data="admin_scheduled_create")])
     kb_rows.append([InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_scheduled_cancel_create")])
     kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
@@ -781,10 +796,13 @@ async def admin_scheduled_toggle_target(callback: types.CallbackQuery, state: FS
         data["sched_to_ch2"] = not bool(data.get("sched_to_ch2"))
     elif key == "chat":
         data["sched_to_chat"] = not bool(data.get("sched_to_chat"))
+    elif key == "admins":
+        data["sched_to_admins"] = not bool(data.get("sched_to_admins"))
     await state.update_data(**{
         "sched_to_ch1": data.get("sched_to_ch1"),
         "sched_to_ch2": data.get("sched_to_ch2"),
         "sched_to_chat": data.get("sched_to_chat"),
+        "sched_to_admins": data.get("sched_to_admins"),
     })
     await callback.answer()
     await _admin_scheduled_show_targets(callback.message, state)
@@ -812,7 +830,8 @@ async def admin_scheduled_create(callback: types.CallbackQuery, state: FSMContex
     to_ch1 = bool(data.get("sched_to_ch1"))
     to_ch2 = bool(data.get("sched_to_ch2"))
     to_chat = bool(data.get("sched_to_chat"))
-    if not (to_ch1 or to_ch2 or to_chat):
+    to_admins = bool(data.get("sched_to_admins"))
+    if not (to_ch1 or to_ch2 or to_chat or to_admins):
         await callback.answer("Нужно выбрать хотя бы один ресурс", show_alert=True)
         return
     if not run_at_utc:
@@ -828,6 +847,7 @@ async def admin_scheduled_create(callback: types.CallbackQuery, state: FSMContex
         send_to_channel1=to_ch1,
         send_to_channel2=to_ch2,
         send_to_chat=to_chat,
+        send_to_admins=to_admins,
         run_at_utc=run_at_utc,
         button_text=btn_text,
         button_url=btn_url,

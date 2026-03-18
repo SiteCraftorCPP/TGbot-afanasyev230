@@ -12,7 +12,8 @@ def text_to_telegram_html(text: str) -> str:
     if not text or not text.strip():
         return ""
     s = str(text)
-    s = s.replace("&", "&amp;").replace("<", "&lt;")
+    # Telegram HTML parse_mode: минимально экранируем HTML-спецсимволы
+    s = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     s = re.sub(r"__(.+?)__", r"<u>\1</u>", s, flags=re.DOTALL)
     s = re.sub(r"\*(.+?)\*", r"<b>\1</b>", s, flags=re.DOTALL)
     s = re.sub(r"_(.+?)_", r"<i>\1</i>", s, flags=re.DOTALL)

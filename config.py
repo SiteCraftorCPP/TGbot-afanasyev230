@@ -6,6 +6,7 @@ BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+TELEGRAM_PROXY = (os.getenv("TELEGRAM_PROXY") or "").strip() or None
 _raw_admin = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS = {int(x.strip()) for x in _raw_admin.split(",") if x.strip()}
 _raw_op = os.getenv("OPERATOR_IDS", "")
