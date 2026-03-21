@@ -756,14 +756,27 @@ async def admin_scheduled_datetime(message: types.Message, state: FSMContext):
     )
 
 
+def _is_telegram_reply_markup_error(err_lower: str) -> bool:
+    """Ошибка именно про инлайн-кнопки, а не про «url» в тексте подписи/HTML."""
+    if "reply_markup" in err_lower or "inline keyboard" in err_lower or "inline_keyboard" in err_lower:
+        return True
+    if "inline keyboard button" in err_lower:
+        return True
+    if "wrong http url" in err_lower and "button" in err_lower:
+        return True
+    return False
+
+
 def _scheduled_preview_reply_markup(btn_text: str | None, btn_url: str | None) -> InlineKeyboardMarkup | None:
     """Кнопка с нормализованным URL; текст до 64 символов (лимит Telegram)."""
-    if not btn_text or not btn_url:
+    t = (btn_text or "").strip()
+    u = (btn_url or "").strip()
+    if not t or not u:
         return None
-    url = normalize_telegram_button_url(btn_url)
+    url = normalize_telegram_button_url(u)
     if not url:
         return None
-    label = (btn_text or "").strip()[:64] or "Ссылка"
+    label = t[:64] or "Ссылка"
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text=label, url=url)]]
     )
@@ -794,30 +807,35 @@ async def _send_scheduled_post_preview(bot, chat_id: int, data: dict) -> None:
         html_msg = html_full
     plain_msg = (text[:_SCHED_MESSAGE_MAX] + "…") if len(text) > _SCHED_MESSAGE_MAX else text
 
-    async def _send_with_fallback_media(send_coro_factory, no_markup=False):
-        """Сначала с кнопкой и HTML, при ошибке — без кнопки / без HTML."""
-        rm = None if no_markup else reply_markup
+    async def _send_with_fallback_media(send_coro_factory):
+        """HTML + кнопка → при ошибке сущностей: plain + кнопка; при ошибке клавиатуры: без кнопки."""
+        rm = reply_markup
         try:
             await send_coro_factory(html_caption, parse_mode, rm)
             return
         except TelegramBadRequest as e:
             err = str(e).lower()
-            if "button" in err or "url" in err or "inline" in err:
-                try:
-                    await send_coro_factory(html_caption, parse_mode, None)
-                    return
-                except TelegramBadRequest:
-                    pass
-            if "parse" in err or "entities" in err:
+            # Сначала ошибка разметки подписи — не трогаем кнопку (не путать с «url» в тексте ошибки)
+            if ("parse" in err or "entities" in err) and not _is_telegram_reply_markup_error(err):
                 try:
                     await send_coro_factory(plain_caption, None, rm)
                     return
-                except TelegramBadRequest:
-                    try:
+                except TelegramBadRequest as e2:
+                    err2 = str(e2).lower()
+                    if _is_telegram_reply_markup_error(err2):
                         await send_coro_factory(plain_caption, None, None)
                         return
-                    except TelegramBadRequest:
-                        pass
+                    raise
+            if _is_telegram_reply_markup_error(err):
+                try:
+                    await send_coro_factory(html_caption, parse_mode, None)
+                    return
+                except TelegramBadRequest as e2:
+                    err2 = str(e2).lower()
+                    if "parse" in err2 or "entities" in err2:
+                        await send_coro_factory(plain_caption, None, None)
+                        return
+                    raise
             raise
 
     if media_type == "photo" and media_file_id:
@@ -860,17 +878,31 @@ async def _send_scheduled_post_preview(bot, chat_id: int, data: dict) -> None:
             )
         except TelegramBadRequest as e:
             err = str(e).lower()
-            if "button" in err or "url" in err or "inline" in err:
-                await bot.send_message(
-                    chat_id,
-                    html_msg or "—",
-                    parse_mode=parse_mode,
-                    reply_markup=None,
-                )
-            elif "parse" in err or "entities" in err:
-                await bot.send_message(chat_id, plain_msg or "—", reply_markup=reply_markup)
-            else:
-                raise
+            if ("parse" in err or "entities" in err) and not _is_telegram_reply_markup_error(err):
+                try:
+                    await bot.send_message(
+                        chat_id,
+                        plain_msg or "—",
+                        reply_markup=reply_markup,
+                    )
+                    return
+                except TelegramBadRequest as e2:
+                    if _is_telegram_reply_markup_error(str(e2).lower()):
+                        await bot.send_message(chat_id, plain_msg or "—", reply_markup=None)
+                        return
+                    raise
+            if _is_telegram_reply_markup_error(err):
+                try:
+                    await bot.send_message(
+                        chat_id,
+                        html_msg or "—",
+                        parse_mode=parse_mode,
+                        reply_markup=None,
+                    )
+                except TelegramBadRequest:
+                    await bot.send_message(chat_id, plain_msg or "—", reply_markup=None)
+                return
+            raise
 
 
 async def _admin_scheduled_show_targets(msg_target, state: FSMContext):
