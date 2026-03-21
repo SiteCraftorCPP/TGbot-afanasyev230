@@ -25,6 +25,16 @@ def text_to_telegram_html(text: str) -> str:
 broadcast_text_to_html = text_to_telegram_html
 
 
+def normalize_telegram_button_url(url: str) -> str:
+    """Ссылка для InlineKeyboardButton: только http(s)/tg; иначе добавляем https://."""
+    u = (url or "").strip()
+    if not u:
+        return u
+    if not u.startswith(("http://", "https://", "tg://")):
+        u = "https://" + u.lstrip("/")
+    return u
+
+
 def escape_md(text: str) -> str:
     if not text:
         return ""
