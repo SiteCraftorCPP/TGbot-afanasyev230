@@ -108,6 +108,7 @@ class AdminFunnelStates(StatesGroup):
     add_content = State()
     add_button_text = State()
     add_button_url = State()
+    review = State()  # как отложенный пост: предпросмотр + готово
     edit_delay = State()
     edit_content = State()
     edit_button_text = State()
@@ -854,6 +855,16 @@ async def _send_funnel_step_preview_admin(bot, chat_id: int, step_id: int) -> No
         media_file_id=media_file_id,
         media_kind=media_type,
         kb_cta=kb,
+    )
+
+
+def _funnel_review_keyboard() -> InlineKeyboardMarkup:
+    """Как в отложенных постах: предпросмотр отдельной кнопкой, затем выход в список."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="👁 Предпросмотр", callback_data="admin_funnel_step_preview")],
+            [InlineKeyboardButton(text="✅ Готово", callback_data="admin_funnel_review_done")],
+        ]
     )
 
 
@@ -1730,7 +1741,15 @@ async def admin_funnel_add_delay(message: types.Message, state: FSMContext):
         return
     await state.update_data(delay_hours=hours)
     await state.set_state(AdminFunnelStates.add_content)
-    await message.answer("📩 Отправь сообщение для рассылки.")
+    await message.answer(
+        "📩 Контент шага — одним сообщением:\n"
+        "• обычный текст;\n"
+        "• фото с подписью;\n"
+        "• видео с подписью;\n"
+        "• файл (документ) с подписью.\n\n"
+        "Подпись к фото/видео/файлу = текст поста для пользователя (как в рассылке). "
+        "Можно отправить только медиа без подписи, если текст не нужен."
+    )
 
 
 def _extract_funnel_media(message: types.Message):
@@ -1805,7 +1824,7 @@ async def admin_funnel_toggle(callback: types.CallbackQuery):
     if not current:
         await callback.answer("Шаг не найден", show_alert=True)
         return
-    _, order_num, delay_hours, text_raw, media_type, media_file_id, is_active = current
+    _, order_num, delay_hours, text_raw, media_type, media_file_id, is_active, _bt, _bu = current
     update_funnel_step(sid, is_active=0 if is_active else 1)
     text, kb = _funnel_list_text_and_kb()
     await callback.message.edit_text(text, reply_markup=kb)
@@ -1856,8 +1875,9 @@ async def admin_funnel_edit_delay(message: types.Message, state: FSMContext):
     update_funnel_step(sid, delay_hours=hours)
     await state.set_state(AdminFunnelStates.edit_content)
     await message.answer(
-        "Теперь отправь новое сообщение для этого шага (текст или медиа с подписью).\n"
-        "Если хочешь оставить текст/медиа как есть — просто продублируй текущее сообщение."
+        "Отправь новое сообщение для шага одним сообщением:\n"
+        "текст, или фото / видео / файл с подписью (подпись = текст поста).\n\n"
+        "Если ничего не меняешь — перешли тот же контент ещё раз."
     )
 
 
@@ -1898,11 +1918,13 @@ async def admin_funnel_add_button_text(message: types.Message, state: FSMContext
         return
     if raw in ("", "-"):
         update_funnel_step(sid, button_text=None, button_url=None)
-        await state.clear()
-        await message.answer("Шаг автоворонки добавлен без кнопки.\n\n👁 Предпросмотр как у пользователя:")
-        await _send_funnel_step_preview_admin(message.bot, message.chat.id, sid)
-        text_list, kb = _funnel_list_text_and_kb()
-        await message.answer(text_list, reply_markup=kb)
+        await state.update_data(funnel_step_id=sid)
+        await state.set_state(AdminFunnelStates.review)
+        await message.answer(
+            "Шаг сохранён без кнопки.\n"
+            "«👁 Предпросмотр» — как у пользователя, «✅ Готово» — в список шагов.",
+            reply_markup=_funnel_review_keyboard(),
+        )
         return
 
     await state.update_data(tmp_button_text=raw)
@@ -1929,11 +1951,13 @@ async def admin_funnel_add_button_url(message: types.Message, state: FSMContext)
         return
     label = btn_text[:64] if len(btn_text) > 64 else btn_text
     update_funnel_step(sid, button_text=label, button_url=url)
-    await state.clear()
-    await message.answer("✅ Шаг автоворонки добавлен с кнопкой.\n\n👁 Предпросмотр как у пользователя:")
-    await _send_funnel_step_preview_admin(message.bot, message.chat.id, sid)
-    text_list, kb = _funnel_list_text_and_kb()
-    await message.answer(text_list, reply_markup=kb)
+    await state.update_data(funnel_step_id=sid)
+    await state.set_state(AdminFunnelStates.review)
+    await message.answer(
+        "✅ Шаг с кнопкой сохранён.\n"
+        "«👁 Предпросмотр» — как у пользователя, «✅ Готово» — в список шагов.",
+        reply_markup=_funnel_review_keyboard(),
+    )
 
 
 @router.message(AdminFunnelStates.edit_button_text, F.text)
@@ -1949,11 +1973,12 @@ async def admin_funnel_edit_button_text(message: types.Message, state: FSMContex
         return
     if raw in ("", "-"):
         update_funnel_step(sid, button_text=None, button_url=None)
-        await state.clear()
-        await message.answer("✅ Кнопка для шага удалена / отключена.\n\n👁 Предпросмотр как у пользователя:")
-        await _send_funnel_step_preview_admin(message.bot, message.chat.id, sid)
-        text_list, kb = _funnel_list_text_and_kb()
-        await message.answer(text_list, reply_markup=kb)
+        await state.update_data(funnel_step_id=sid)
+        await state.set_state(AdminFunnelStates.review)
+        await message.answer(
+            "Кнопка снята. «👁 Предпросмотр» / «✅ Готово».",
+            reply_markup=_funnel_review_keyboard(),
+        )
         return
 
     await state.update_data(tmp_button_text=raw)
@@ -1980,11 +2005,40 @@ async def admin_funnel_edit_button_url(message: types.Message, state: FSMContext
         return
     label = btn_text[:64] if len(btn_text) > 64 else btn_text
     update_funnel_step(sid, button_text=label, button_url=url)
+    await state.update_data(funnel_step_id=sid)
+    await state.set_state(AdminFunnelStates.review)
+    await message.answer(
+        "✅ Кнопка обновлена. «👁 Предпросмотр» / «✅ Готово».",
+        reply_markup=_funnel_review_keyboard(),
+    )
+
+
+@router.callback_query(AdminFunnelStates.review, F.data == "admin_funnel_step_preview")
+async def admin_funnel_step_preview_cb(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    data = await state.get_data()
+    sid = data.get("funnel_step_id")
+    if not sid:
+        await callback.answer("Нет шага", show_alert=True)
+        return
+    await _send_funnel_step_preview_admin(callback.bot, callback.message.chat.id, sid)
+    await callback.answer("Предпросмотр отправлен.")
+
+
+@router.callback_query(AdminFunnelStates.review, F.data == "admin_funnel_review_done")
+async def admin_funnel_review_done(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
     await state.clear()
-    await message.answer("✅ Кнопка для шага обновлена.\n\n👁 Предпросмотр как у пользователя:")
-    await _send_funnel_step_preview_admin(message.bot, message.chat.id, sid)
     text_list, kb = _funnel_list_text_and_kb()
-    await message.answer(text_list, reply_markup=kb)
+    try:
+        await callback.message.edit_text(text_list, reply_markup=kb)
+    except Exception:
+        await callback.message.answer(text_list, reply_markup=kb)
+    await callback.answer()
 
 
 @router.callback_query(F.data == "admin_back")
