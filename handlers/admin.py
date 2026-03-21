@@ -828,6 +828,35 @@ async def _send_followup_style_preview(
         pass
 
 
+def _preview_kb_from_flat_button(btn_text: str | None, btn_url: str | None) -> InlineKeyboardMarkup | None:
+    """Инлайн-кнопка url как в отложенных постах / рассылке."""
+    return _build_scheduled_preview_kb_cta(
+        {
+            "sched_cta_buttons": None,
+            "sched_button_text": btn_text,
+            "sched_button_url": btn_url,
+        }
+    )
+
+
+async def _send_funnel_step_preview_admin(bot, chat_id: int, step_id: int) -> None:
+    """Показать админу предпросмотр шага автоворонки (как рассылка / отложенный пост)."""
+    steps = get_funnel_steps()
+    row = next((s for s in steps if s[0] == step_id), None)
+    if not row:
+        return
+    _id, _order, _delay, text_raw, media_type, media_file_id, _active, bt, bu = row
+    kb = _preview_kb_from_flat_button(bt, bu)
+    await _send_followup_style_preview(
+        bot,
+        chat_id,
+        text=text_raw or "",
+        media_file_id=media_file_id,
+        media_kind=media_type,
+        kb_cta=kb,
+    )
+
+
 async def _admin_scheduled_show_targets(msg_target, state: FSMContext):
     data = await state.get_data()
     to_ch1 = bool(data.get("sched_to_ch1"))
@@ -1870,7 +1899,8 @@ async def admin_funnel_add_button_text(message: types.Message, state: FSMContext
     if raw in ("", "-"):
         update_funnel_step(sid, button_text=None, button_url=None)
         await state.clear()
-        await message.answer("Шаг автоворонки добавлен без кнопки.")
+        await message.answer("Шаг автоворонки добавлен без кнопки.\n\n👁 Предпросмотр как у пользователя:")
+        await _send_funnel_step_preview_admin(message.bot, message.chat.id, sid)
         text_list, kb = _funnel_list_text_and_kb()
         await message.answer(text_list, reply_markup=kb)
         return
@@ -1878,7 +1908,7 @@ async def admin_funnel_add_button_text(message: types.Message, state: FSMContext
     await state.update_data(tmp_button_text=raw)
     await state.set_state(AdminFunnelStates.add_button_url)
     await message.answer(
-        "🌐 Теперь отправьте ссылку для кнопки:"
+        "🌐 Ссылка для кнопки (как в рассылке: обязательно с https:// или http://):"
     )
 
 
@@ -1894,9 +1924,14 @@ async def admin_funnel_add_button_url(message: types.Message, state: FSMContext)
         await state.clear()
         await message.answer("Ошибка: не найден шаг автоворонки или текст кнопки.")
         return
-    update_funnel_step(sid, button_text=btn_text, button_url=url)
+    if not (url.startswith("http://") or url.startswith("https://")):
+        await message.answer("Отправьте корректную ссылку, начинающуюся с http:// или https://")
+        return
+    label = btn_text[:64] if len(btn_text) > 64 else btn_text
+    update_funnel_step(sid, button_text=label, button_url=url)
     await state.clear()
-    await message.answer("✅ Шаг автоворонки добавлен с кнопкой.")
+    await message.answer("✅ Шаг автоворонки добавлен с кнопкой.\n\n👁 Предпросмотр как у пользователя:")
+    await _send_funnel_step_preview_admin(message.bot, message.chat.id, sid)
     text_list, kb = _funnel_list_text_and_kb()
     await message.answer(text_list, reply_markup=kb)
 
@@ -1915,7 +1950,8 @@ async def admin_funnel_edit_button_text(message: types.Message, state: FSMContex
     if raw in ("", "-"):
         update_funnel_step(sid, button_text=None, button_url=None)
         await state.clear()
-        await message.answer("✅ Кнопка для шага удалена / отключена.")
+        await message.answer("✅ Кнопка для шага удалена / отключена.\n\n👁 Предпросмотр как у пользователя:")
+        await _send_funnel_step_preview_admin(message.bot, message.chat.id, sid)
         text_list, kb = _funnel_list_text_and_kb()
         await message.answer(text_list, reply_markup=kb)
         return
@@ -1923,7 +1959,7 @@ async def admin_funnel_edit_button_text(message: types.Message, state: FSMContex
     await state.update_data(tmp_button_text=raw)
     await state.set_state(AdminFunnelStates.edit_button_url)
     await message.answer(
-        "🌐 Теперь отправьте новую ссылку для кнопки:"
+        "🌐 Новая ссылка (как в рассылке: с https:// или http://):"
     )
 
 
@@ -1939,9 +1975,14 @@ async def admin_funnel_edit_button_url(message: types.Message, state: FSMContext
         await state.clear()
         await message.answer("Ошибка: не найден шаг автоворонки или текст кнопки.")
         return
-    update_funnel_step(sid, button_text=btn_text, button_url=url)
+    if not (url.startswith("http://") or url.startswith("https://")):
+        await message.answer("Отправьте корректную ссылку, начинающуюся с http:// или https://")
+        return
+    label = btn_text[:64] if len(btn_text) > 64 else btn_text
+    update_funnel_step(sid, button_text=label, button_url=url)
     await state.clear()
-    await message.answer("✅ Кнопка для шага обновлена.")
+    await message.answer("✅ Кнопка для шага обновлена.\n\n👁 Предпросмотр как у пользователя:")
+    await _send_funnel_step_preview_admin(message.bot, message.chat.id, sid)
     text_list, kb = _funnel_list_text_and_kb()
     await message.answer(text_list, reply_markup=kb)
 

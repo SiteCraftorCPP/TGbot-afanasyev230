@@ -44,7 +44,7 @@ from database import (
 )
 from middlewares.user_log import UserLogMiddleware
 from keyboards import MENU_KB, MENU_TEXT, get_main_reply_kb
-from utils import text_to_telegram_html, normalize_telegram_button_url
+from utils import normalize_telegram_button_url, text_to_telegram_html
 from handlers.main import router as main_router
 from handlers.recording import router as recording_router, start_record as recording_start
 from handlers.format_funnel import router as format_router, format_show_screen
@@ -256,9 +256,11 @@ async def funnel_worker():
                 try:
                     reply_markup = None
                     if button_text and button_url:
+                        safe_url = normalize_telegram_button_url(button_url)
+                        label = (button_text or "")[:64] or "Ссылка"
                         reply_markup = InlineKeyboardMarkup(
                             inline_keyboard=[
-                                [InlineKeyboardButton(text=button_text, url=button_url)]
+                                [InlineKeyboardButton(text=label, url=safe_url)]
                             ]
                         )
                     html_text = text_to_telegram_html(text) if text else None
