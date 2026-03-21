@@ -2,7 +2,6 @@ import asyncio
 import csv
 import io
 from aiogram import Router, types, F
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -62,9 +61,6 @@ from database import (
 
 router = Router()
 
-# Лимиты Telegram (предпросмотр отложенного поста)
-_SCHED_CAPTION_MAX = 1024
-_SCHED_MESSAGE_MAX = 4096
 
 
 class AdminGameStates(StatesGroup):
@@ -648,6 +644,9 @@ async def admin_scheduled_new(callback: types.CallbackQuery, state: FSMContext):
         sched_to_ch2=bool(POST_CHANNEL_2),
         sched_to_chat=bool(POST_CHAT_ID),
         sched_to_admins=True,
+        sched_button_text=None,
+        sched_button_url=None,
+        sched_cta_buttons=None,
     )
     await callback.message.answer(
         "✏️ Текст отложенного поста.\n\n"
@@ -756,153 +755,77 @@ async def admin_scheduled_datetime(message: types.Message, state: FSMContext):
     )
 
 
-def _is_telegram_reply_markup_error(err_lower: str) -> bool:
-    """Ошибка именно про инлайн-кнопки, а не про «url» в тексте подписи/HTML."""
-    if "reply_markup" in err_lower or "inline keyboard" in err_lower or "inline_keyboard" in err_lower:
-        return True
-    if "inline keyboard button" in err_lower:
-        return True
-    if "wrong http url" in err_lower and "button" in err_lower:
-        return True
-    return False
+def _build_scheduled_preview_kb_cta(data: dict) -> InlineKeyboardMarkup | None:
+    """Та же логика кнопок, что в рассылке (Follow-up): sched_cta_buttons или текст+url."""
+    buttons = data.get("sched_cta_buttons")
+    if not buttons:
+        t = (data.get("sched_button_text") or "").strip()
+        u = (data.get("sched_button_url") or "").strip()
+        if not t or not u:
+            return None
+        if not (u.startswith("http://") or u.startswith("https://")):
+            u = normalize_telegram_button_url(u)
+        buttons = [{"type": "url", "text": t[:64], "url": u}]
+    row = []
+    for b in buttons:
+        if b.get("type") == "url":
+            row.append(InlineKeyboardButton(text=b.get("text", "Ссылка"), url=b.get("url", "")))
+        else:
+            row.append(
+                InlineKeyboardButton(
+                    text=b.get("text", "Подробнее"),
+                    callback_data=b.get("callback", "menu_record"),
+                )
+            )
+    return InlineKeyboardMarkup(inline_keyboard=[row]) if row else None
 
 
-def _scheduled_preview_reply_markup(btn_text: str | None, btn_url: str | None) -> InlineKeyboardMarkup | None:
-    """Кнопка с нормализованным URL; текст до 64 символов (лимит Telegram)."""
-    t = (btn_text or "").strip()
-    u = (btn_url or "").strip()
-    if not t or not u:
-        return None
-    url = normalize_telegram_button_url(u)
-    if not url:
-        return None
-    label = t[:64] or "Ссылка"
-    return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text=label, url=url)]]
-    )
-
-
-async def _send_scheduled_post_preview(bot, chat_id: int, data: dict) -> None:
-    """Отправить админу предпросмотр отложенного поста (как увидят пользователи / в каналах)."""
-    text = data.get("sched_text") or ""
-    media_type = data.get("sched_media_type")
-    media_file_id = data.get("sched_media_file_id")
-    btn_text = data.get("sched_button_text")
-    btn_url = data.get("sched_button_url")
-    reply_markup = _scheduled_preview_reply_markup(btn_text, btn_url)
-
-    html_full = broadcast_text_to_html(text) if text.strip() else None
-    parse_mode = "HTML" if html_full else None
-    # Подпись к медиа — макс. 1024 символа; не режем готовый HTML (ломаются теги)
-    if text.strip() and len(text) > _SCHED_CAPTION_MAX:
-        short_cap = text[: _SCHED_CAPTION_MAX - 1] + "…"
-        html_caption = broadcast_text_to_html(short_cap)
-    else:
-        html_caption = html_full
-    plain_caption = (text[:_SCHED_CAPTION_MAX] + "…") if len(text) > _SCHED_CAPTION_MAX else (text or None)
-    if text.strip() and len(text) > _SCHED_MESSAGE_MAX:
-        short_msg = text[: _SCHED_MESSAGE_MAX - 1] + "…"
-        html_msg = broadcast_text_to_html(short_msg)
-    else:
-        html_msg = html_full
-    plain_msg = (text[:_SCHED_MESSAGE_MAX] + "…") if len(text) > _SCHED_MESSAGE_MAX else text
-
-    async def _send_with_fallback_media(send_coro_factory):
-        """HTML + кнопка → при ошибке сущностей: plain + кнопка; при ошибке клавиатуры: без кнопки."""
-        rm = reply_markup
-        try:
-            await send_coro_factory(html_caption, parse_mode, rm)
-            return
-        except TelegramBadRequest as e:
-            err = str(e).lower()
-            # Сначала ошибка разметки подписи — не трогаем кнопку (не путать с «url» в тексте ошибки)
-            if ("parse" in err or "entities" in err) and not _is_telegram_reply_markup_error(err):
-                try:
-                    await send_coro_factory(plain_caption, None, rm)
-                    return
-                except TelegramBadRequest as e2:
-                    err2 = str(e2).lower()
-                    if _is_telegram_reply_markup_error(err2):
-                        await send_coro_factory(plain_caption, None, None)
-                        return
-                    raise
-            if _is_telegram_reply_markup_error(err):
-                try:
-                    await send_coro_factory(html_caption, parse_mode, None)
-                    return
-                except TelegramBadRequest as e2:
-                    err2 = str(e2).lower()
-                    if "parse" in err2 or "entities" in err2:
-                        await send_coro_factory(plain_caption, None, None)
-                        return
-                    raise
-            raise
-
-    if media_type == "photo" and media_file_id:
-        async def _ph(cap, pm, rm):
+async def _send_followup_style_preview(
+    bot,
+    chat_id: int,
+    *,
+    text: str,
+    media_file_id: str | None,
+    media_kind: str | None,
+    kb_cta: InlineKeyboardMarkup | None,
+) -> None:
+    """Предпросмотр как в рассылке (admin_broadcast_preview): те же send_* и parse_mode."""
+    html_caption = broadcast_text_to_html(text) if text else None
+    parse_mode = "HTML" if html_caption else None
+    try:
+        if media_file_id and media_kind == "photo":
             await bot.send_photo(
                 chat_id,
                 media_file_id,
-                caption=cap or None,
-                parse_mode=pm,
-                reply_markup=rm,
+                caption=html_caption or None,
+                parse_mode=parse_mode,
+                reply_markup=kb_cta,
             )
-        await _send_with_fallback_media(_ph)
-    elif media_type == "video" and media_file_id:
-        async def _vd(cap, pm, rm):
+        elif media_file_id and media_kind == "video":
             await bot.send_video(
                 chat_id,
                 media_file_id,
-                caption=cap or None,
-                parse_mode=pm,
-                reply_markup=rm,
+                caption=html_caption or None,
+                parse_mode=parse_mode,
+                reply_markup=kb_cta,
             )
-        await _send_with_fallback_media(_vd)
-    elif media_type == "document" and media_file_id:
-        async def _dc(cap, pm, rm):
+        elif media_file_id and media_kind == "document":
             await bot.send_document(
                 chat_id,
                 media_file_id,
-                caption=cap or None,
-                parse_mode=pm,
-                reply_markup=rm,
+                caption=html_caption or None,
+                parse_mode=parse_mode,
+                reply_markup=kb_cta,
             )
-        await _send_with_fallback_media(_dc)
-    else:
-        try:
+        else:
             await bot.send_message(
                 chat_id,
-                html_msg or "—",
+                html_caption or "—",
                 parse_mode=parse_mode,
-                reply_markup=reply_markup,
+                reply_markup=kb_cta,
             )
-        except TelegramBadRequest as e:
-            err = str(e).lower()
-            if ("parse" in err or "entities" in err) and not _is_telegram_reply_markup_error(err):
-                try:
-                    await bot.send_message(
-                        chat_id,
-                        plain_msg or "—",
-                        reply_markup=reply_markup,
-                    )
-                    return
-                except TelegramBadRequest as e2:
-                    if _is_telegram_reply_markup_error(str(e2).lower()):
-                        await bot.send_message(chat_id, plain_msg or "—", reply_markup=None)
-                        return
-                    raise
-            if _is_telegram_reply_markup_error(err):
-                try:
-                    await bot.send_message(
-                        chat_id,
-                        html_msg or "—",
-                        parse_mode=parse_mode,
-                        reply_markup=None,
-                    )
-                except TelegramBadRequest:
-                    await bot.send_message(chat_id, plain_msg or "—", reply_markup=None)
-                return
-            raise
+    except Exception:
+        pass
 
 
 async def _admin_scheduled_show_targets(msg_target, state: FSMContext):
@@ -975,12 +898,15 @@ async def admin_scheduled_preview(callback: types.CallbackQuery, state: FSMConte
     if not text and not media_file_id:
         await callback.answer("Нет текста и медиа для предпросмотра.", show_alert=True)
         return
-    try:
-        await _send_scheduled_post_preview(callback.bot, callback.message.chat.id, data)
-    except Exception as e:
-        err = str(e)[:180]
-        await callback.answer(f"Предпросмотр: {err}", show_alert=True)
-        return
+    kb_cta = _build_scheduled_preview_kb_cta(data)
+    await _send_followup_style_preview(
+        callback.bot,
+        callback.message.chat.id,
+        text=data.get("sched_text") or "",
+        media_file_id=data.get("sched_media_file_id"),
+        media_kind=data.get("sched_media_type"),
+        kb_cta=kb_cta,
+    )
     await callback.answer("Предпросмотр отправлен.")
 
 
@@ -1041,14 +967,20 @@ async def admin_scheduled_button_text(message: types.Message, state: FSMContext)
     raw = (message.text or "").strip()
     if raw in ("", "-"):
         # без кнопки
-        await state.update_data(sched_button_text=None, sched_button_url=None)
+        await state.update_data(
+            sched_button_text=None,
+            sched_button_url=None,
+            sched_cta_buttons=None,
+        )
         await state.set_state(AdminScheduledStates.targets)
         await _admin_scheduled_show_targets(message, state)
         return
 
-    await state.update_data(sched_button_text=raw)
+    await state.update_data(sched_button_text=raw, sched_cta_buttons=None)
     await state.set_state(AdminScheduledStates.button_url)
-    await message.answer("🌐 Теперь отправьте ссылку для кнопки:")
+    await message.answer(
+        "🌐 Отправьте ссылку для кнопки (как в рассылке: обязательно с https:// или http://)."
+    )
 
 
 @router.message(AdminScheduledStates.button_url, F.text)
@@ -1062,8 +994,15 @@ async def admin_scheduled_button_url(message: types.Message, state: FSMContext):
         await state.clear()
         await message.answer("Ошибка: не найден текст кнопки.")
         return
-
-    await state.update_data(sched_button_url=url)
+    # Как в рассылке (Follow-up): только http(s), плюс тот же формат cta_buttons для предпросмотра
+    if not (url.startswith("http://") or url.startswith("https://")):
+        await message.answer("Отправьте корректную ссылку, начинающуюся с http:// или https://")
+        return
+    label = btn_text[:64] if len(btn_text) > 64 else btn_text
+    await state.update_data(
+        sched_button_url=url,
+        sched_cta_buttons=[{"type": "url", "text": label, "url": url}],
+    )
     await state.set_state(AdminScheduledStates.targets)
     await _admin_scheduled_show_targets(message, state)
 
@@ -1565,42 +1504,16 @@ async def admin_broadcast_preview(callback: types.CallbackQuery, state: FSMConte
                     )
                 )
         kb_cta = InlineKeyboardMarkup(inline_keyboard=[row])
-    html_caption = broadcast_text_to_html(text) if text else None
-
-    try:
-        if media_items and media_kind == "photo":
-            await bot.send_photo(
-                chat_id,
-                media_items[0]["file_id"],
-                caption=html_caption or None,
-                parse_mode="HTML" if html_caption else None,
-                reply_markup=kb_cta,
-            )
-        elif media_items and media_kind == "video":
-            await bot.send_video(
-                chat_id,
-                media_items[0]["file_id"],
-                caption=html_caption or None,
-                parse_mode="HTML" if html_caption else None,
-                reply_markup=kb_cta,
-            )
-        elif media_items and media_kind == "document":
-            await bot.send_document(
-                chat_id,
-                media_items[0]["file_id"],
-                caption=html_caption or None,
-                parse_mode="HTML" if html_caption else None,
-                reply_markup=kb_cta,
-            )
-        else:
-            await bot.send_message(
-                chat_id,
-                html_caption or "—",
-                parse_mode="HTML" if html_caption else None,
-                reply_markup=kb_cta,
-            )
-    except Exception:
-        pass
+    media_file_id = media_items[0]["file_id"] if media_items else None
+    mk = media_kind if media_file_id else None
+    await _send_followup_style_preview(
+        bot,
+        chat_id,
+        text=text,
+        media_file_id=media_file_id,
+        media_kind=mk,
+        kb_cta=kb_cta,
+    )
     await callback.answer("Предпросмотр отправлен.")
 
 
