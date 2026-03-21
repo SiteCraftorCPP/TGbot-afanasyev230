@@ -28,3 +28,5 @@ def _int_or_none(value: str | None):
 POST_CHANNEL_1 = _int_or_none(os.getenv("POST_CHANNEL_1"))
 POST_CHANNEL_2 = _int_or_none(os.getenv("POST_CHANNEL_2"))
 POST_CHAT_ID = _int_or_none(os.getenv("POST_CHAT_ID"))
+# Тема форума в POST_CHAT_ID (число из ссылки t.me/groupname/7 → 7). Пусто = без темы (General).
+POST_CHAT_THREAD_ID = _int_or_none(os.getenv("POST_CHAT_THREAD_ID"))
