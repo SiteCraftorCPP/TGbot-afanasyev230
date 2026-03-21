@@ -751,6 +751,81 @@ async def admin_scheduled_datetime(message: types.Message, state: FSMContext):
     )
 
 
+async def _send_scheduled_post_preview(bot, chat_id: int, data: dict) -> None:
+    """Отправить админу предпросмотр отложенного поста (как увидят пользователи / в каналах)."""
+    text = data.get("sched_text") or ""
+    media_type = data.get("sched_media_type")
+    media_file_id = data.get("sched_media_file_id")
+    btn_text = data.get("sched_button_text")
+    btn_url = data.get("sched_button_url")
+    reply_markup = None
+    if btn_text and btn_url:
+        reply_markup = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text=btn_text, url=btn_url)]]
+        )
+    html_text = broadcast_text_to_html(text) if text.strip() else None
+    parse_mode = "HTML" if html_text else None
+
+    if media_type == "photo" and media_file_id:
+        try:
+            await bot.send_photo(
+                chat_id,
+                media_file_id,
+                caption=html_text or None,
+                parse_mode=parse_mode,
+                reply_markup=reply_markup,
+            )
+        except Exception:
+            await bot.send_photo(
+                chat_id,
+                media_file_id,
+                caption=text or None,
+                reply_markup=reply_markup,
+            )
+    elif media_type == "video" and media_file_id:
+        try:
+            await bot.send_video(
+                chat_id,
+                media_file_id,
+                caption=html_text or None,
+                parse_mode=parse_mode,
+                reply_markup=reply_markup,
+            )
+        except Exception:
+            await bot.send_video(
+                chat_id,
+                media_file_id,
+                caption=text or None,
+                reply_markup=reply_markup,
+            )
+    elif media_type == "document" and media_file_id:
+        try:
+            await bot.send_document(
+                chat_id,
+                media_file_id,
+                caption=html_text or None,
+                parse_mode=parse_mode,
+                reply_markup=reply_markup,
+            )
+        except Exception:
+            await bot.send_document(
+                chat_id,
+                media_file_id,
+                caption=text or None,
+                reply_markup=reply_markup,
+            )
+    else:
+        try:
+            await bot.send_message(
+                chat_id,
+                html_text or "—",
+                parse_mode=parse_mode,
+                reply_markup=reply_markup,
+            )
+        except Exception:
+            await bot.send_message(chat_id, text or "—", reply_markup=reply_markup)
+
+
 async def _admin_scheduled_show_targets(msg_target, state: FSMContext):
     data = await state.get_data()
     to_ch1 = bool(data.get("sched_to_ch1"))
@@ -776,6 +851,7 @@ async def _admin_scheduled_show_targets(msg_target, state: FSMContext):
     if POST_CHAT_ID:
         kb_rows.append([InlineKeyboardButton(text="Чат", callback_data="admin_scheduled_toggle_chat")])
     kb_rows.append([InlineKeyboardButton(text="Пользователям бота", callback_data="admin_scheduled_toggle_admins")])
+    kb_rows.append([InlineKeyboardButton(text="👁 Предпросмотр", callback_data="admin_scheduled_preview")])
     kb_rows.append([InlineKeyboardButton(text="✅ Создать пост", callback_data="admin_scheduled_create")])
     kb_rows.append([InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_scheduled_cancel_create")])
     kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
@@ -806,6 +882,26 @@ async def admin_scheduled_toggle_target(callback: types.CallbackQuery, state: FS
     })
     await callback.answer()
     await _admin_scheduled_show_targets(callback.message, state)
+
+
+@router.callback_query(AdminScheduledStates.targets, F.data == "admin_scheduled_preview")
+async def admin_scheduled_preview(callback: types.CallbackQuery, state: FSMContext):
+    """Живой предпросмотр отложенного поста в ЛС админа (как в рассылке)."""
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer()
+        return
+    data = await state.get_data()
+    text = (data.get("sched_text") or "").strip()
+    media_file_id = data.get("sched_media_file_id")
+    if not text and not media_file_id:
+        await callback.answer("Нет текста и медиа для предпросмотра.", show_alert=True)
+        return
+    try:
+        await _send_scheduled_post_preview(callback.bot, callback.message.chat.id, data)
+    except Exception:
+        await callback.answer("Не удалось отправить предпросмотр.", show_alert=True)
+        return
+    await callback.answer("Предпросмотр отправлен.")
 
 
 @router.callback_query(AdminScheduledStates.targets, F.data == "admin_scheduled_cancel_create")
